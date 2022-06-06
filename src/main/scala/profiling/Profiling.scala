@@ -4,6 +4,7 @@ import chisel3._
 import chisel3.util._
 import fpgamshr.interfaces._
 import fpgamshr.util._
+import scala.language.reflectiveCalls
 
 object Profiling {
   val dataWidth = 64
@@ -37,7 +38,7 @@ object ProfilingInterface {
 class ProfilingInterface(addrWidth: Int, dataWidth: Int, numInputs: Int) extends Module {
     require(addrWidth >= log2Ceil(numInputs))
     val io = IO(new Bundle{
-      val inAddr = DecoupledIO(UInt(addrWidth.W)).flip
+      val inAddr = Flipped(DecoupledIO(UInt(addrWidth.W)))
       val outData = DecoupledIO(UInt(dataWidth.W))
       val inRegs = Input(Vec(numInputs, UInt(dataWidth.W)))
     })
@@ -116,11 +117,11 @@ class ProfilingSelector(addrWidth: Int, dataWidth: Int, numSubModules: Int) exte
     // println(s"subModuleAddrWidth=$subModuleAddrWidth")
     val io = IO(new Bundle{
         /* Address from the top level (input) */
-        val in = DecoupledIO(UInt(addrWidth.W)).flip
+        val in = Flipped(DecoupledIO(UInt(addrWidth.W)))
         /* Address to the submodules (output) */
         val submodulesReq = Vec(numSubModules, DecoupledIO(UInt(subModuleAddrWidth.W)))
         /* Responses (data) from the submodules (input) */
-        val submodulesResp = Vec(numSubModules, DecoupledIO(UInt(dataWidth.W))).flip
+        val submodulesResp = Flipped(Vec(numSubModules, DecoupledIO(UInt(dataWidth.W))))
         /* Response to the top level (output) */
         val out = DecoupledIO(UInt(dataWidth.W))
     })

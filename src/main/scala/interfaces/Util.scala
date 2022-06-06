@@ -2,6 +2,7 @@ package fpgamshr.interfaces
 
 import chisel3._
 import chisel3.util.{DecoupledIO}
+import scala.language.reflectiveCalls
 
 // class PayloadIdIO(dataWidth: Int, val idWidth: Int) extends Bundle with HasID {
 //     val payload = UInt(dataWidth.W)
@@ -56,7 +57,7 @@ class DataAndChosenIO(val dataWidth: Int, val chosenWidth: Int)
 }
 
 class DecAddrIdDecDataIdIO(addrWidth: Int, dataWidth: Int, idWidth: Int) extends Bundle {
-  val addr  = DecoupledIO(new AddrIdIO(addrWidth, idWidth)).flip
+  val addr  = Flipped(DecoupledIO(new AddrIdIO(addrWidth, idWidth)))
   val data  = DecoupledIO(new DataIdIO(dataWidth, idWidth))
   override def cloneType = (new DecAddrIdDecDataIdIO(addrWidth, dataWidth, idWidth)).asInstanceOf[this.type]
 }

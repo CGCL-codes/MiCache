@@ -4,11 +4,12 @@ import chisel3._
 import chisel3.util._
 import fpgamshr.interfaces._
 import fpgamshr.util._
+import scala.language.reflectiveCalls
 
 class BRAMQueue(dataWidth: Int, depth: Int, resetCount: Int=0, almostEmptyMargin: Int=0, initFilePath: String="") extends Module {
     val addrWidth = log2Ceil(depth)
     val io = IO(new Bundle {
-        val enq = DecoupledIO(UInt(dataWidth.W)).flip
+        val enq = Flipped(DecoupledIO(UInt(dataWidth.W)))
         val deq = DecoupledIO(UInt(dataWidth.W))
         val count = Output(UInt((addrWidth+1).W))
         val almostEmpty = Output(Bool())

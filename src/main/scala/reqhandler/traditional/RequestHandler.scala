@@ -7,6 +7,7 @@ import chisel3.util._
 import fpgamshr.profiling._
 import fpgamshr.reqhandler.cuckoo.{RequestHandlerBase}
 import fpgamshr.reqhandler.ResponseGeneratorOneOutputArbitraryEntriesPerRow
+import scala.language.reflectiveCalls
 
 object RequestHandlerTraditional {
     val reqAddrWidth = 28   /* Excluding the part that is always 0, i.e. the log2Ceil(reqDataWidth) least significant bits, and the req handler address (log2Ceil(numReqHandlers)) */

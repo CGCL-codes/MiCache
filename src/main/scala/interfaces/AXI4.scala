@@ -2,6 +2,7 @@ package fpgamshr.interfaces
 
 import chisel3._
 import chisel3.util.{DecoupledIO}
+import scala.language.reflectiveCalls
 
 object AXI4Channel extends Enumeration {
     type AXI4Channel = Value

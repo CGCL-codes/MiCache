@@ -3,6 +3,7 @@ package fpgamshr.interfaces
 import chisel3._
 import chisel3.util.{DecoupledIO}
 import scala.collection.mutable.ArrayBuffer
+import scala.language.reflectiveCalls
 
 class ModularBundle extends Bundle {
   private val connectionFunctions = ArrayBuffer.empty[Bundle => Unit]

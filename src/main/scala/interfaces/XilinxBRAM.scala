@@ -1,6 +1,7 @@
 package fpgamshr.interfaces
 
 import chisel3._
+import scala.language.reflectiveCalls
 
 class XilinxTrueDualPortBRAMIO(addrWidth: Int, dataWidth: Int) extends Bundle {
     val addra  = Input(UInt(addrWidth.W))

@@ -5,6 +5,7 @@ import chisel3.util._
 import fpgamshr.interfaces._
 import fpgamshr.util._
 import fpgamshr.profiling._
+import scala.language.reflectiveCalls
 
 object ResponseGenerator {
   val memDataWidth = 512
@@ -28,8 +29,8 @@ class ResponseGenerator(idWidth: Int=ResponseGenerator.idWidth, memDataWidth: In
   val maxOffset = (1 << offsetWidth) - 1
   val inputQueuesDepth = ResponseGenerator.inputQueuesDepth
   val io = IO(new Bundle{
-    val in = DecoupledIO(new RespGenIO(memDataWidth, offsetWidth, idWidth, numEntriesPerRow)).flip
-    val outs = Vec(DecoupledIO(new DataIdIO(reqDataWidth, idWidth)), numOutputPorts)
+    val in = Flipped(DecoupledIO(new RespGenIO(memDataWidth, offsetWidth, idWidth, numEntriesPerRow)))
+    val outs = Vec(numOutputPorts, DecoupledIO(new DataIdIO(reqDataWidth, idWidth)))
     val axiProfiling = new AXI4LiteReadOnlyProfiling(Profiling.dataWidth, Profiling.regAddrWidth)
   })
 
@@ -78,7 +79,7 @@ class ResponseGenerator(idWidth: Int=ResponseGenerator.idWidth, memDataWidth: In
     loadValue=currRowLastValidEntryH-1.U
   )
 
-  val currentEntries = Wire(Vec(new LdBufEntry(offsetWidth, idWidth), numOutputPorts))
+  val currentEntries = Wire(Vec(numOutputPorts, new LdBufEntry(offsetWidth, idWidth)))
   val entryMuxMappings = (0 until numOutputPorts).map(outPort => (0 until entrySelectionMuxNumInputs).map(inPort => (inPort.U -> currRowEntries(outPort + inPort * numOutputPorts))))
   val dataMuxMappings = (0 until numOutputPorts).map(outPort => (0 to maxOffset).map(offset => (offset.U -> currRowData((offset + 1) * reqDataWidth - 1, offset * reqDataWidth))))
   val eagerFork = Module(new EagerFork(Bool(), numOutputPorts))
@@ -101,11 +102,11 @@ class ResponseGenerator(idWidth: Int=ResponseGenerator.idWidth, memDataWidth: In
 
   /* FSM */
   val sIdle :: sScan :: Nil = Enum(2)
-  val state = Reg(init=sIdle)
+  val state = RegInit(sIdle)
 
   switch(state) {
     is (sIdle) {
-      when (responseStart & (currRowLastValidEntryH != 0.U) & outReady) {
+      when (responseStart & (currRowLastValidEntryH =/= 0.U) & outReady) {
         state := sScan
       }
     }
@@ -177,7 +178,7 @@ class ResponseGeneratorOneOutputArbitraryEntriesPerRow(idWidth: Int=ResponseGene
     val maxOffset = (1 << offsetWidth) - 1
     val inputQueuesDepth = ResponseGenerator.inputQueuesDepth
     val io = IO(new Bundle{
-      val in = DecoupledIO(new RespGenIO(memDataWidth, offsetWidth, idWidth, numEntriesPerRow)).flip
+      val in = Flipped(DecoupledIO(new RespGenIO(memDataWidth, offsetWidth, idWidth, numEntriesPerRow)))
       val out = DecoupledIO(new DataIdIO(reqDataWidth, idWidth))
       val axiProfiling = new AXI4LiteReadOnlyProfiling(Profiling.dataWidth, Profiling.regAddrWidth)
     })
@@ -227,11 +228,11 @@ class ResponseGeneratorOneOutputArbitraryEntriesPerRow(idWidth: Int=ResponseGene
 
     /* FSM */
     val sIdle :: sScan :: Nil = Enum(2)
-    val state = Reg(init=sIdle)
+    val state = RegInit(sIdle)
 
     switch(state) {
       is (sIdle) {
-        when (responseStart & (currRowLastValidEntry != 0.U) & outReady) {
+        when (responseStart & (currRowLastValidEntry =/= 0.U) & outReady) {
           state := sScan
         }
       }

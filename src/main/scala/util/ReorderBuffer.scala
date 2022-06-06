@@ -6,6 +6,7 @@ import fpgamshr.interfaces._
 import fpgamshr.profiling._
 
 import scala.collection.mutable.ArrayBuffer
+import scala.language.reflectiveCalls
 
 object ReorderBufferAXI {
     val addrWidth = 32
@@ -21,7 +22,7 @@ object ReorderBufferAXI {
 
 class ReorderBufferIO(addrWidth: Int, dataWidth: Int, inputIdWidth: Int, outputIdWidth: Int) extends Bundle {
   val in = new AXI4FullReadOnly(UInt(dataWidth.W), addrWidth, inputIdWidth)
-  val out = new AXI4FullReadOnly(UInt(dataWidth.W), addrWidth, outputIdWidth).flip
+  val out = Flipped(new AXI4FullReadOnly(UInt(dataWidth.W), addrWidth, outputIdWidth))
   val axiProfiling = new AXI4LiteReadOnlyProfiling(Profiling.dataWidth, Profiling.regAddrWidth + Profiling.subModuleAddrWidth)
   // val clock2x = Input(Clock())
   override def cloneType = (new ReorderBufferIO(addrWidth, dataWidth, inputIdWidth, outputIdWidth)).asInstanceOf[this.type]
@@ -43,7 +44,7 @@ class DummyReorderBufferAXI(addrWidth: Int=ReorderBufferAXI.addrWidth, dataWidth
     val cyclesFull = 0.U
     val cyclesReqsInStalled = ProfilingCounter(io.in.ARVALID & ~io.in.ARREADY, io.axiProfiling)
     val cyclesReqsOutStalled = cyclesReqsInStalled
-    val cyclesRespOutStalled = ProfilingCounter(io.out.RVALID & ~io.out.RREADY, io.axiProfiling)
+    val cyclesRespOutStalled = ProfilingCounter(io.in.RVALID & ~io.in.RREADY, io.axiProfiling)
 
     val profilingRegisters = ArrayBuffer(receivedRequestsCount, receivedResponsesCount, currentlyUsedEntries, maxUsedEntries,
       sentResponsesCount, cyclesFull, cyclesReqsInStalled, cyclesReqsOutStalled, cyclesRespOutStalled)// ++ usedEntriesHistogram
@@ -163,7 +164,7 @@ class ReorderBufferAXI(addrWidth: Int=ReorderBufferAXI.addrWidth, dataWidth: Int
         /* Empty buffer: tailCounter = headCounter, headCounterCommitted = headCounter - 1
          * Leave when tailCounter != headCounter */
         is(sEmpty) {
-            when(tailCounter != headCounter) {
+            when(tailCounter =/= headCounter) {
                 state := sWaitHC
             }
         }
@@ -216,7 +217,7 @@ class ReorderBufferAXI(addrWidth: Int=ReorderBufferAXI.addrWidth, dataWidth: Int
             when(inputDataEb.io.in.ready) {
                 /* We try to speculatively read past tail address but we make sure never
                  * to go ahead headCounterCommitted, otherwise the valid bit may not have been updated yet. */
-                when(tailAddrCounter != headCounterCommitted) {
+                when(tailAddrCounter =/= headCounterCommitted) {
                     tailAddrCounter := tailAddrCounter + 1.U
                 }
                 when(validReadOut) {
@@ -235,11 +236,11 @@ class ReorderBufferAXI(addrWidth: Int=ReorderBufferAXI.addrWidth, dataWidth: Int
         is(sRead) {
             when(inputDataEb.io.in.ready) {
                 when(validMemory.io.dout === 1.U) {
-                    when(currentDataAddress != previousDataAddress) {
+                    when(currentDataAddress =/= previousDataAddress) {
                         inputDataEb.io.in.valid := true.B
                     }
                     tailCounter := currentDataAddress + 1.U
-                    when(tailAddrCounter != headCounterCommitted) {
+                    when(tailAddrCounter =/= headCounterCommitted) {
                         tailAddrCounter := tailAddrCounter + 1.U
                     }
                     when(currentDataAddress === headCounter - 1.U) {
@@ -274,10 +275,13 @@ class ReorderBufferAXI(addrWidth: Int=ReorderBufferAXI.addrWidth, dataWidth: Int
       val cyclesFullStalled = ProfilingCounter(io.in.ARVALID & full, io.axiProfiling)
       val cyclesReqsInStalled = ProfilingCounter(io.in.ARVALID & ~io.in.ARREADY, io.axiProfiling)
       val cyclesReqsOutStalled = ProfilingCounter(io.out.ARVALID & ~io.out.ARREADY, io.axiProfiling)
-      val cyclesRespOutStalled = ProfilingCounter(io.out.RVALID & ~io.out.RREADY, io.axiProfiling)
+      val cyclesRespInStalled = ProfilingCounter(io.out.RVALID & ~io.out.RREADY, io.axiProfiling)
+      val cyclesRespOutStalled = ProfilingCounter(io.in.RVALID & ~io.in.RREADY, io.axiProfiling)
+    //   val currentHeadCounter = RegEnable((headCounter)(headCounter.getWidth-1, 0), enable=io.axiProfiling.snapshot)
+    //   val currentTailCounter = RegEnable((tailCounter)(tailCounter.getWidth-1, 0), enable=io.axiProfiling.snapshot)
 
       val profilingRegisters = ArrayBuffer(receivedRequestsCount, receivedResponsesCount, currentlyUsedEntries, maxUsedEntries,
-        sentResponsesCount, cyclesFullStalled, cyclesReqsInStalled, cyclesReqsOutStalled, cyclesRespOutStalled)// ++ usedEntriesHistogram
+        sentResponsesCount, cyclesFullStalled, cyclesReqsInStalled, cyclesReqsOutStalled, cyclesRespInStalled, cyclesRespOutStalled)// ++ usedEntriesHistogram
 
       val innerAxiProfiling = Wire(new AXI4LiteReadOnlyProfiling(Profiling.dataWidth, Profiling.regAddrWidth))
       val profilingInterface = ProfilingInterface(innerAxiProfiling.axi, Vec(profilingRegisters))

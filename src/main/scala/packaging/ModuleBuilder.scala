@@ -3,6 +3,7 @@ import  chisel3._
 import  scala.sys.process._
 import  java.nio.file._
 import  scala.language.postfixOps
+import scala.language.reflectiveCalls
 
 import java.io.{File} // To generate the BRAM initialization files
 

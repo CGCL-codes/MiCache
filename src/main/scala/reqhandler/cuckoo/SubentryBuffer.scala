@@ -11,6 +11,7 @@ import fpgamshr.main.FPGAMSHR
 import java.io.{File, BufferedWriter, FileWriter} // To generate the BRAM initialization files
 
 import scala.collection.mutable.ArrayBuffer
+import scala.language.reflectiveCalls
 
 object SubentryBuffer {
     val numEntriesPerRow = 4
@@ -36,7 +37,7 @@ class SubentryBuffer(idWidth: Int=SubentryBuffer.idWidth, memDataWidth: Int=Sube
     val inputQueuesDepth = SubentryBuffer.inputQueuesDepth
     val totalEntries = numEntriesPerRow * (1 << rowAddrWidth)
     val io = IO(new Bundle {
-        val in = DecoupledIO(new MSHRToLdBufIO(offsetWidth, idWidth, dataWidth=memDataWidth, rowAddrWidth=rowAddrWidth)).flip
+        val in = Flipped(DecoupledIO(new MSHRToLdBufIO(offsetWidth, idWidth, dataWidth=memDataWidth, rowAddrWidth=rowAddrWidth)))
         val frqOut = DecoupledIO(UInt(rowAddrWidth.W))
         val stopAlloc = Output(Bool())
         val respGenOut = DecoupledIO(new RespGenIO(memDataWidth, offsetWidth, idWidth, numEntriesPerRow))
@@ -284,8 +285,9 @@ class SubentryBuffer(idWidth: Int=SubentryBuffer.idWidth, memDataWidth: Int=Sube
 
       val accumUsedEntries = ProfilingArbitraryIncrementCounter(Array((true.B -> (currentlyUsedEntries + 0.U((log2Ceil(totalEntries + 1) + 1).W)).asSInt)), io.axiProfiling)
       val accumUsedRows = ProfilingArbitraryIncrementCounter(Array((true.B -> ((1 << rowAddrWidth).U - frq.io.count).asSInt)), io.axiProfiling)
+      val frqStopAlloc = ProfilingCounter(io.stopAlloc, io.axiProfiling)
       val profilingRegisters = ArrayBuffer(snapshotUsedEntries, maxUsedEntries, currentlyUsedRows, maxUsedRows, snapshotRowsWithNextRowPtrValid, maxRowsWithNextRowPtrValid,
-                                     cyclesRespGenStall, cyclesWritePipelineStall, cyclesValidNextPtrInputStall, nextPtrCacheHits, accumUsedEntries._1, accumUsedRows._1)// ++ usedEntriesHistogram
+                                     cyclesRespGenStall, cyclesWritePipelineStall, cyclesValidNextPtrInputStall, nextPtrCacheHits, accumUsedEntries._1, accumUsedRows._1, frqStopAlloc)// ++ usedEntriesHistogram
       if(Profiling.enableHistograms) {
         val usedEntriesHistogram = (0 until log2Ceil(totalEntries)).map(i => ProfilingCounter(currentlyUsedEntries >= (1 << i).U, io.axiProfiling))
         profilingRegisters ++= usedEntriesHistogram
@@ -346,11 +348,11 @@ class SubentryBufferUpdateNetwork(offsetWidth: Int, idWidth: Int, rowAddrWidth: 
 
 class NextPtrCache(rowAddrWidth: Int, numEntries: Int) extends Module {
   val io=IO(new Bundle {
-    val lookupAddr = ValidIO(new OrigAndNewRowAddrIO(rowAddrWidth)).flip
+    val lookupAddr = Flipped(ValidIO(new OrigAndNewRowAddrIO(rowAddrWidth)))
     val deallocMatchingEntry = Input(Bool())
     val outAddr = Output(UInt(rowAddrWidth.W))
     val hit = Output(Bool())
-    val updateEntry = ValidIO(new NextPtrCacheEntryIO(rowAddrWidth)).flip
+    val updateEntry = Flipped(ValidIO(new NextPtrCacheEntryIO(rowAddrWidth)))
   })
 
   if(numEntries > 0) {
@@ -407,7 +409,7 @@ class NextPtrCache(rowAddrWidth: Int, numEntries: Int) extends Module {
  * BRAM because it has to be initialized */
 class FreeRowQueue(rowAddrWidth: Int=SubentryBuffer.rowAddrWidth, almostEmptyMargin: Int) extends Module {
     val io = IO(new Bundle {
-        val enq = DecoupledIO(UInt(rowAddrWidth.W)).flip
+        val enq = Flipped(DecoupledIO(UInt(rowAddrWidth.W)))
         val deq = DecoupledIO(UInt(rowAddrWidth.W))
         val count = Output(UInt((rowAddrWidth+1).W))
         val almostEmpty = Output(Bool())

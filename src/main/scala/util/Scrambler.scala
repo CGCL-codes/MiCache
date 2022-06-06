@@ -5,6 +5,7 @@ import chisel3.util._
 import fpgamshr.interfaces._
 
 import scala.math.max
+import scala.language.reflectiveCalls
 
 class Scrambler[T <: Data](gen: T, numInputs: Int, numOutputs: Int) extends Module {
   val inputIndexWidth = log2Ceil(numInputs)

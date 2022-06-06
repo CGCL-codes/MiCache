@@ -35,6 +35,7 @@ package fpgamshr.util
 
 import chisel3._
 import chisel3.util._
+import scala.language.reflectiveCalls
 
 /** IO bundle definition for an Arbiter, which takes some number of ready-valid inputs and outputs
   * (selects) at most one.

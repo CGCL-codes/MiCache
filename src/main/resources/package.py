@@ -9,7 +9,7 @@ import os
 script = '''
 create_project -force "{0}" /tmp
 ipx::infer_core -name "{0}" -vendor "{1}" -library "{2}" -version "{3}" "{4}"
-set_property supported_families {{virtex7 Production qvirtex7 Production kintex7 Production kintex7l Production qkintex7 Production qkintex7l Production artix7 Production artix7l Production aartix7 Production qartix7 Production zynq Production qzynq Production azynq Production}} [ipx::current_core]
+set_property supported_families {{virtex7 Production qvirtex7 Production kintex7 Production kintex7l Production qkintex7 Production qkintex7l Production artix7 Production artix7l Production aartix7 Production qartix7 Production zynq Production qzynq Production azynq Production versal Production virtexuplusHBM Production}} [ipx::current_core]
 set_property core_revision 1 [ipx::current_core]
 set_property display_name "{0}" [ipx::current_core]
 set_property description "{0}" [ipx::current_core]
@@ -29,7 +29,7 @@ update_compile_order -fileset sources_1
 update_compile_order -fileset sources_1
 set_property file_type {{Memory Initialization Files}} [get_files -of_objects [get_filesets sources_1] [glob "{4}/*.hex"]]
 ipx::package_project -root_dir "{4}" -vendor "{1}" -library "{2}"
-set_property supported_families {{virtex7 Production qvirtex7 Production kintex7 Production kintex7l Production qkintex7 Production qkintex7l Production artix7 Production artix7l Production aartix7 Production qartix7 Production zynq Production qzynq Production azynq Production}} [ipx::current_core]
+set_property supported_families {{virtex7 Production qvirtex7 Production kintex7 Production kintex7l Production qkintex7 Production qkintex7l Production artix7 Production artix7l Production aartix7 Production qartix7 Production zynq Production qzynq Production azynq Production versal Production virtexuplusHBM Production}} [ipx::current_core]
 set_property core_revision 1 [ipx::current_core]
 set_property display_name "{0}" [ipx::current_core]
 set_property name "{0}" [ipx::current_core]
@@ -119,7 +119,7 @@ def map_interface(name, kind):
 		script = __axi4Tcl.format(name, 'slave', make_tcl_port_list(axi4.get_port_dict(name)))
 		return script
 	else:
-		print 'unknown interface: ' + kind
+		print('unknown interface: ' + kind)
 		return ''
 
 def make_tcl_port_list(d, f=lambda x: x):
@@ -142,10 +142,10 @@ def make_vivado_script(jsonfile):
 
 def run_vivado(jsonfile, script):
 	p = Popen(['vivado', '-mode', 'tcl', '-nolog', '-nojournal'], stdin=PIPE, stdout=PIPE, stderr=STDOUT)
-        with open(os.path.join(os.path.dirname(jsonfile), 'package.tcl'), 'w') as tclf:
-            tclf.write(script)
-	output = p.communicate(input = script)[0]
-	print output.decode()
+	with open(os.path.join(os.path.dirname(jsonfile), 'package.tcl'), 'w') as tclf:
+		tclf.write(script)
+	output = p.communicate(input = script.encode("utf-8"))[0]
+	print(output.decode())
 
 def parse_args():
 	parser = argparse.ArgumentParser(description = 'Package a hardware module specified by JSON as IP-XACT.')

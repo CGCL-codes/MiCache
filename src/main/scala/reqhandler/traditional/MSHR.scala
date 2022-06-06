@@ -6,6 +6,7 @@ import fpgamshr.util._
 import chisel3.util._
 import fpgamshr.profiling._
 import fpgamshr.reqhandler.ResponseGeneratorOneOutputArbitraryEntriesPerRow
+import scala.language.reflectiveCalls
 
 object MSHRTraditional {
     val addrWidth = 30 /* Excluding the part that is always 0, i.e. the log2Ceil(reqDataWidth) least significant bits, and the req handler address (log2Ceil(numReqHandlers)) */
@@ -30,8 +31,8 @@ class MSHRTraditional(addrWidth: Int=MSHRTraditional.addrWidth, numMSHR: Int=MSH
     val ldBufEntryIdxWidth = log2Ceil(numSubentriesPerRow - 1)
     val io = IO(new Bundle{
         /* Incoming requests */
-        val allocIn = DecoupledIO(new AddrIdIO(addrWidth, idWidth)).flip
-        val deallocIn = DecoupledIO(new AddrDataIO(addrWidth, memDataWidth)).flip
+        val allocIn = Flipped(DecoupledIO(new AddrIdIO(addrWidth, idWidth)))
+        val deallocIn = Flipped(DecoupledIO(new AddrDataIO(addrWidth, memDataWidth)))
         /* Output to the load buffer unit */
         val outLdBuf = DecoupledIO(new TraditionalMSHRToLdBufIO(offsetWidth, idWidth, dataWidth=memDataWidth, rowAddrWidth=ldBufRowAddrWidth, ldBufEntryIdxWidth))
         /* Interface to memory arbiter, with burst requests to be sent to DDR */
@@ -103,7 +104,7 @@ class MSHRTraditional(addrWidth: Int=MSHRTraditional.addrWidth, numMSHR: Int=MSH
     defaultEntry.valid := false.B
     defaultEntry.tag := DontCare
     defaultEntry.ldBufLastValidIdx := DontCare
-    val mshrs = Reg(init = Vec(Seq.fill(numMSHR)(defaultEntry)))
+    val mshrs = RegInit(Vec(Seq.fill(numMSHR)(defaultEntry)))
 
     /* Comparison logic */
     val entrySelection = mshrs.map(m => m.tag === currTag & m.valid)

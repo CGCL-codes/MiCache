@@ -5,6 +5,7 @@ import fpgamshr.interfaces._
 import fpgamshr.util._
 import chisel3.util._
 import fpgamshr.profiling._
+import scala.language.reflectiveCalls
 
 object SubentryBufferTraditional {
     val numEntriesPerRow = 4
@@ -38,7 +39,7 @@ class SubentryBufferTraditional(idWidth: Int=SubentryBufferTraditional.idWidth, 
     val entryIdxWidth = log2Ceil(numEntriesPerRow - 1)
     val totalEntries = memDepth * numEntriesPerRow
     val io = IO(new Bundle {
-        val in = DecoupledIO(new TraditionalMSHRToLdBufIO(offsetWidth, idWidth, dataWidth=memDataWidth, rowAddrWidth=rowAddrWidth, entryIdxWidth)).flip
+        val in = Flipped(DecoupledIO(new TraditionalMSHRToLdBufIO(offsetWidth, idWidth, dataWidth=memDataWidth, rowAddrWidth=rowAddrWidth, entryIdxWidth)))
         val respGenOut = DecoupledIO(new RespGenIO(memDataWidth, offsetWidth, idWidth, numEntriesPerRow + 1))
         val axiProfiling = new AXI4LiteReadOnlyProfiling(Profiling.dataWidth, Profiling.regAddrWidth)
     })

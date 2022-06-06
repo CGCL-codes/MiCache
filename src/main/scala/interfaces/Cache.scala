@@ -3,16 +3,17 @@ package fpgamshr.interfaces
 import chisel3._
 import chisel3.util._
 import fpgamshr.profiling._
+import scala.language.reflectiveCalls
 
 class CacheIO(addrWidth: Int, idWidth: Int, reqDataWidth: Int, memDataWidth: Int, sizeReductionWidth: Int) extends Bundle {
     /* Incoming requests */
-    val inReq = DecoupledIO(new AddrIdIO(addrWidth, idWidth)).flip
+    val inReq = Flipped(DecoupledIO(new AddrIdIO(addrWidth, idWidth)))
     /* If they miss, they are just forwarded as they are to this interface */
     val outMisses = DecoupledIO(new AddrIdIO(addrWidth, idWidth))
     /* Responses of requests that hit */
     val outData = DecoupledIO(new DataIdIO(reqDataWidth, idWidth))
     /* New cache lines coming from memory */
-    val inData = DecoupledIO(new AddrDataIO(addrWidth, memDataWidth)).flip
+    val inData = Flipped(DecoupledIO(new AddrDataIO(addrWidth, memDataWidth)))
     /* Profiling */
     val axiProfiling = new AXI4LiteReadOnlyProfiling(Profiling.dataWidth, Profiling.regAddrWidth)
     /* Control */

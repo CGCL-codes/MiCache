@@ -2,6 +2,7 @@ package fpgamshr.util
 
 import chisel3._
 import chisel3.util.{DecoupledIO, ValidIO, log2Ceil, RegEnable}
+import scala.language.reflectiveCalls
 
 object ElasticBuffer {
     def apply[T <: Data](in: DecoupledIO[T]) = {
@@ -14,7 +15,7 @@ object ElasticBuffer {
 
 class ElasticBuffer[T <: Data](gen: T) extends Module {
     val io = IO(new Bundle {
-        val in = DecoupledIO(gen).flip
+        val in = Flipped(DecoupledIO(gen))
         val out = DecoupledIO(gen)
     })
 
@@ -25,7 +26,7 @@ class ElasticBuffer[T <: Data](gen: T) extends Module {
 
 class ElasticBufferRegExport[T <: Data](gen: T) extends Module {
     val io = IO(new Bundle {
-        val in = DecoupledIO(gen).flip
+        val in = Flipped(DecoupledIO(gen))
         val out = DecoupledIO(gen)
         val regs = Vec(2, ValidIO(gen))
         val readyReg = Output(Bool())
@@ -65,7 +66,7 @@ object DReg {
 
 class DReg[T <: Data](gen: T) extends Module {
     val io = IO(new Bundle {
-        val in = DecoupledIO(gen).flip
+        val in = Flipped(DecoupledIO(gen))
         val out = DecoupledIO(gen)
     })
 
@@ -87,7 +88,7 @@ object EagerFork{
 
 class EagerFork[T <: Data](gen: T, numOutputs: Int) extends Module {
     val io = IO(new Bundle {
-        val in = DecoupledIO(gen).flip
+        val in = Flipped(DecoupledIO(gen))
         val out = Vec(numOutputs, DecoupledIO(gen))
     })
 

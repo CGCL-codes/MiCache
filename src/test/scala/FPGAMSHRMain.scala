@@ -11,6 +11,7 @@ import org.scalatest.{Matchers, FlatSpec}
 import fpgamshr.profiling.{Profiling}
 import java.io.{File, BufferedWriter, FileWriter} // To generate the .tcl and .h files
 import scala.sys.process._ // for the ! operator
+import scala.language.postfixOps
 
 
 /**

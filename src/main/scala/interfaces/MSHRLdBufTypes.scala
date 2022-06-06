@@ -2,6 +2,7 @@ package fpgamshr.interfaces
 
 import chisel3._
 import chisel3.util.{log2Ceil}
+import scala.language.reflectiveCalls
 
 trait HasRowAddr extends Bundle {
   val rowAddrWidth: Int

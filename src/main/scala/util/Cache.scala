@@ -4,6 +4,7 @@ import chisel3._
 import chisel3.util._
 import fpgamshr.interfaces._
 import fpgamshr.profiling._
+import scala.language.reflectiveCalls
 
 import java.io._ // To generate the BRAM initialization files
 

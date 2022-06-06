@@ -3,6 +3,7 @@ import  scala.io.Source
 import  play.api.libs.json._
 import  play.api.libs.functional.syntax._
 import  chisel3.Module
+import scala.language.reflectiveCalls
 
 /** Abstraction for known bus interfaces / pin groups. */
 final case class Interface(name: String, kind: String)

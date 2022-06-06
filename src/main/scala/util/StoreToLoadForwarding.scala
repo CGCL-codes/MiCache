@@ -2,6 +2,7 @@ package fpgamshr.util
 
 import chisel3._
 import chisel3.util.{MuxCase, RegEnable}
+import scala.language.reflectiveCalls
 
 object StoreToLoadForwarding {
     val defaultType = UInt(32.W)

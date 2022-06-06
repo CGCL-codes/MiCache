@@ -6,6 +6,7 @@ import fpgamshr.util._
 import chisel3.util._
 import fpgamshr.profiling._
 import fpgamshr.reqhandler.ResponseGeneratorOneOutputArbitraryEntriesPerRow
+import scala.language.reflectiveCalls
 
 /* Test configurations:
  - trigger MSHRAlmostFull:

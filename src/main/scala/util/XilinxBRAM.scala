@@ -5,6 +5,7 @@ import chisel3.experimental._
 import chisel3.util.{log2Ceil, HasBlackBoxResource, Queue, DecoupledIO, RRArbiter, ShiftRegister, isPow2}
 
 import fpgamshr.interfaces._
+import scala.language.reflectiveCalls
 
 class XilinxTrueDualPortReadFirstBRAM(width: Int,
                                  depth: Int,
@@ -53,7 +54,7 @@ class AXITDPBRAMInterface(addrWidth: Int, axiDataWidth: Int, bramDataWidth: Int,
     val bramLatency = 2
     val io = IO(new Bundle{
         val axi = new AXI4Lite(UInt(axiDataWidth.W), addrWidth)
-        val bram = new XilinxTrueDualPortBRAMIO(addrWidth, bramDataWidth).flip
+        val bram = Flipped(new XilinxTrueDualPortBRAMIO(addrWidth, bramDataWidth))
     })
 
 
@@ -171,7 +172,7 @@ class AXISDPBRAMInterface(addrWidth: Int, axiDataWidth: Int, bramDataWidth: Int,
     val bramLatency = 2
     val io = IO(new Bundle{
         val axi = new AXI4Lite(UInt(axiDataWidth.W), addrWidth)
-        val bram = new XilinxSimpleDualPortBRAMIO(addrWidth, bramDataWidth).flip
+        val bram = Flipped(new XilinxSimpleDualPortBRAMIO(addrWidth, bramDataWidth))
     })
 
 

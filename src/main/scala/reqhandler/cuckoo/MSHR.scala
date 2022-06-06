@@ -6,6 +6,7 @@ import fpgamshr.interfaces._
 import fpgamshr.util._
 import fpgamshr.profiling._
 import chisel3.core.dontTouch
+import scala.language.reflectiveCalls
 
 import java.io._ // To generate the BRAM initialization files
 
@@ -55,14 +56,16 @@ class CuckooMSHR(addrWidth: Int=MSHR.addrWidth, numMSHRPerHashTable: Int=MSHR.nu
   val entryType = new MSHREntry(tagWidth, ldBufRowAddrWidth)
   val hashTableAddrWidth = log2Ceil(numMSHRPerHashTable)
   val hashMultConstWidth = if (tagWidth > MSHR.maxMultConstWidth) MSHR.maxMultConstWidth else tagWidth
+  val hbmChannelWidth = 28 - offsetWidth - log2Ceil(reqDataWidth / 8)
   /*
    * a = positive odd integer on addr.getWidth bits
   https://en.wikipedia.org/wiki/Universal_hashing#Avoiding_modular_arithmetic */
   // def hash(aExponent: Int, b: Int, tag: UInt): UInt = ((tag << aExponent) + tag + b.U)(tagWidth - 1, tagWidth - hashTableAddrWidth)=
   // println(s"tagWidth=$tagWidth, hashTableAddrWidth=$hashTableAddrWidth")
   //def hash(a: Int, b: Int, tag: UInt): UInt = (a.U(hashMultConstWidth.W) * tag + b.U((tagWidth-hashTableAddrWidth).W))(tagWidth - 1, tagWidth - hashTableAddrWidth)
+  def hash(a: Int, b: Int, tag: UInt): UInt = ((a.U(hashMultConstWidth.W) * tag(hbmChannelWidth - 1, 0))(tagWidth - 1, tagWidth - hashTableAddrWidth) + b.U((hashTableAddrWidth).W))
   /* The way the hash was computed, b was useless anyway, so we can remove it altogether. */
-  def hash(a: Int, tag: UInt): UInt = (a.U(hashMultConstWidth.W) * tag)(tagWidth - 1, tagWidth - hashTableAddrWidth)
+  // def hash(a: Int, tag: UInt): UInt = (a.U(hashMultConstWidth.W) * tag(hbmChannelWidth - 1, 0))(tagWidth - 1, tagWidth - hashTableAddrWidth)
   //def hash2(a1: Int, a2: Int, tag: UInt): UInt = (tag + (tag << a1.U) + (tag << a2.U))(tagWidth - 1, tagWidth - hashTableAddrWidth)
   def getTag(addr: UInt): UInt = addr(addrWidth - 1, addrWidth - tagWidth)
   def getOffset(addr: UInt): UInt = addr(offsetWidth - 1, 0)
@@ -74,10 +77,10 @@ class CuckooMSHR(addrWidth: Int=MSHR.addrWidth, numMSHRPerHashTable: Int=MSHR.nu
   // }
 
   val io = IO(new Bundle{
-    val allocIn = DecoupledIO(new AddrIdIO(addrWidth, idWidth)).flip
-    val deallocIn = DecoupledIO(new AddrDataIO(addrWidth, memDataWidth)).flip
+    val allocIn = Flipped(DecoupledIO(new AddrIdIO(addrWidth, idWidth)))
+    val deallocIn = Flipped(DecoupledIO(new AddrDataIO(addrWidth, memDataWidth)))
     /* FRQ = free (load buffer) row queue */
-    val frqIn = DecoupledIO(UInt(ldBufRowAddrWidth.W)).flip
+    val frqIn = Flipped(DecoupledIO(UInt(ldBufRowAddrWidth.W)))
     /* Output to the load buffer unit */
     val outLdBuf = DecoupledIO(new MSHRToLdBufIO(offsetWidth, idWidth, dataWidth=memDataWidth, rowAddrWidth=ldBufRowAddrWidth))
     /* Raised by the load buffer unit when the FRQ is empty and allocations
@@ -164,11 +167,12 @@ class CuckooMSHR(addrWidth: Int=MSHR.addrWidth, numMSHRPerHashTable: Int=MSHR.nu
   /* Address hashing */
   val r = new scala.util.Random(42)
   val a = (0 until numHashTables).map(_ => r.nextInt(1 << hashMultConstWidth))
-  //val b = (0 until numHashTables).map(_ => r.nextInt(1 << (tagWidth - hashTableAddrWidth)))
-  val hashedTags = (0 until numHashTables).map(i => if(sameHashFunction) hash(a(0), getTag(delayedRequest(0).bits.addr)) else hash(a(i), getTag(delayedRequest(0).bits.addr)))
+  val b = (0 until numHashTables).map(_ => r.nextInt(1 << hashTableAddrWidth))
+  // val hashedTags = (0 until numHashTables).map(i => if(sameHashFunction) hash(a(0), getTag(delayedRequest(0).bits.addr)) else hash(a(i), getTag(delayedRequest(0).bits.addr)))
+  val hashedTags = (0 until numHashTables).map(i => if(sameHashFunction) hash(a(0), b(0), getTag(delayedRequest(0).bits.addr)) else hash(a(i), b(i), getTag(delayedRequest(0).bits.addr)))
   //a.indices.foreach(i => println(s"a($i)=${a(i)}"))
   /* Uncomment to print out hashing parameters a and b */
-  // a.indices.foreach(i => println(s"a($i)=${a(i)} b($i)=${b(i)}"))
+  a.indices.foreach(i => println(s"a($i)=${a(i)} b($i)=${b(i)}"))
 
   /* Memories instantiation and interconnection */
   /* Memories are initialized with all zeros, which is fine for us since all the valids will be false */
@@ -267,6 +271,7 @@ class CuckooMSHR(addrWidth: Int=MSHR.addrWidth, numMSHRPerHashTable: Int=MSHR.nu
   val MSHRAlmostFull = allocatedMSHRCounter >= (io.maxAllowedMSHRs - MSHRAlmostFullMargin.U)
 
   stopAllocs := MSHRAlmostFull | io.stopAllocFromLdBuf | stallOnlyAllocs
+  // stopAllocs := io.stopAllocFromLdBuf | stallOnlyAllocs
   stopDeallocs := false.B
 
   /* outLdBuf */
@@ -345,10 +350,10 @@ class MSHRStash(tagWidth: Int, ldBufRowAddrWidth: Int, numEntries: Int, lastTabl
   val entryWithValidType = new MSHREntryValidLastTable(tagWidth, ldBufRowAddrWidth, lastTableIdxWidth)
   val entryType = new MSHREntryLastTable(tagWidth, ldBufRowAddrWidth, lastTableIdxWidth)
   val io = IO(new Bundle{
-    val enq = DecoupledIO(entryType).flip
+    val enq = Flipped(DecoupledIO(entryType))
     val deq = DecoupledIO(entryType)
     val pipelineReady = Input(Bool())
-    val lookupTag = ValidIO(UInt(tagWidth.W)).flip
+    val lookupTag = Flipped(ValidIO(UInt(tagWidth.W)))
     val matchingLdBufPtr = ValidIO(UInt(ldBufRowAddrWidth.W))
     val deallocMatchingEntry = Input(Bool())
   })

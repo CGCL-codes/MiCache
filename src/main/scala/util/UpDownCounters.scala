@@ -2,6 +2,7 @@ package fpgamshr.util
 
 import chisel3._
 import chisel3.util.{MuxCase, log2Ceil, isPow2}
+import scala.language.reflectiveCalls
 
 abstract class UpDownLoadableCounter extends Module {
   val io: UpDownLoadableCounterIO
