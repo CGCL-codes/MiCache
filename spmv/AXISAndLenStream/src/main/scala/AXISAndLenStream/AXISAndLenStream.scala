@@ -72,6 +72,7 @@ class AXISAndLenStream extends Module {
         val done = Input(Bool())
         val rowPtrStream = Flipped(DecoupledIO(UInt(dataWidth.W)))
         val lenStream = DecoupledIO(UInt(dataWidth.W))
+        val wstrb = Flipped(DecoupledIO(UInt((dataWidth/8).W)))
     })
 
     val sIdle :: sRunning :: Nil = Enum(2)
@@ -89,14 +90,16 @@ class AXISAndLenStream extends Module {
 
     val wrAddrEb = ElasticBufferAXISAndLenStream(io.wrAddr)
     val wrDataEb = ElasticBufferAXISAndLenStream(io.wrData)
-    val wrAddrDataAvailable = wrAddrEb.valid & wrDataEb.valid
+    val wstrbEb = ElasticBufferAXISAndLenStream(io.wstrb)
+    val wrAddrDataAvailable = wrAddrEb.valid & wrDataEb.valid & wstrbEb.valid
     wrAddrEb.ready := wrDataEb.valid
     wrDataEb.ready := wrAddrEb.valid
+    wstrbEb.ready := wrAddrEb.valid
 
     start := false.B
     io.wrAck := false.B
     when(wrAddrDataAvailable) {
-      when(wrAddrEb.bits === 0.U) {
+      when(wrAddrEb.bits === 0.U && wstrbEb.bits.andR) {
         when(wrDataEb.bits(0) === 1.U) {
           start := true.B
         }
@@ -105,7 +108,7 @@ class AXISAndLenStream extends Module {
     }
 
     for(i <- 1 to numRegs) {
-      when(wrAddrDataAvailable & (wrAddrEb.bits === i.U)) {
+      when(wrAddrDataAvailable & (wrAddrEb.bits === i.U) & wstrbEb.bits.andR) {
         regs(i-1) := wrDataEb.bits
       }
     }

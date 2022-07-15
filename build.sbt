@@ -54,6 +54,6 @@ libraryDependencies ++= Seq(
 libraryDependencies += "com.typesafe" % "config" % "1.3.0"
 
 scalacOptions ++= scalacOptionsVersion(scalaVersion.value)
-// scalacOptions += "-deprecate"
+scalacOptions ++= Seq("-deprecation", "-feature")
 
 javacOptions ++= javacOptionsVersion(scalaVersion.value)

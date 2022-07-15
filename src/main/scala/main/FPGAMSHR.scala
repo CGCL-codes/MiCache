@@ -93,6 +93,12 @@ numMemoryPorts=${numMemoryPorts}
 	def ipName(): String = s"""FPGAMSHR_ra${FPGAMSHR.reqAddrWidth}
 _id${FPGAMSHR.reqIdWidth}
 _in${FPGAMSHR.numInputs}
+${if (FPGAMSHR.blockOnNextPtr) "_nonextptr" else ""}
+${if (FPGAMSHR.sameHashFunction) "_nocuckoo" else ""}
+_pc${FPGAMSHR.numMemoryPorts}""".replace("\n", "") + (if(FPGAMSHR.useROB) "_rob" else "") + (if(Profiling.enable) "" else "_noprof")
+	def ipName2(): String = s"""FPGAMSHR_ra${FPGAMSHR.reqAddrWidth}
+_id${FPGAMSHR.reqIdWidth}
+_in${FPGAMSHR.numInputs}
 _bk${FPGAMSHR.numReqHandlers}
 _ht${FPGAMSHR.numHashTables}
 _mshr${FPGAMSHR.numMSHRPerHashTable}
@@ -141,7 +147,153 @@ _cpc${FPGAMSHR.numMemoryPorts}""".replace("\n", "") + (if(FPGAMSHR.useROB) "_rob
 	val version = 0.11
 }
 
+// Only ReorderBuffer
 class FPGAMSHR extends Module {
+	require(isPow2(FPGAMSHR.reqDataWidth))
+	require(isPow2(FPGAMSHR.memDataWidth))
+	require(isPow2(FPGAMSHR.numInputs))
+	require(isPow2(FPGAMSHR.numReqHandlers))
+	require(isPow2(FPGAMSHR.numMemoryPorts))
+
+	val totalProfilingAddrWidth = log2Ceil(FPGAMSHR.numInputs) + 1 + 
+									Profiling.regAddrWidth +
+									Profiling.subModuleAddrWidth +
+									log2Ceil(Profiling.dataWidth / 8)
+
+	val io = IO(new Bundle {
+		val in = Vec(FPGAMSHR.numInputs, new AXI4FullReadOnly(UInt(FPGAMSHR.reqDataWidth.W), FPGAMSHR.reqAddrWidth, FPGAMSHR.reqIdWidth))
+		val out = Flipped(Vec(FPGAMSHR.numInputs, new AXI4FullReadOnly(UInt(FPGAMSHR.memDataWidth.W), FPGAMSHR.memAddrWidth, FPGAMSHR.memIdWidth)))
+		val axiProfiling = new AXI4Lite(UInt(Profiling.dataWidth.W), totalProfilingAddrWidth)
+	})
+
+	/* Control interface */
+	/* Address 0 (control):
+	- bit 0: clear if write 1
+	- bit 1: snapshot if write 1
+	*/
+	/* TODO: rename axiProfiling to axiControl */
+	val inputProfilingWriteDataEb = Module(new ElasticBuffer(io.axiProfiling.WDATA.cloneType))
+	val inputProfilingWriteAddrEb = Module(new ElasticBuffer(UInt(2.W)))
+	val inputProfilingWriteStrbEb = Module(new ElasticBuffer(io.axiProfiling.WSTRB.cloneType))
+	inputProfilingWriteDataEb.io.in.bits  := io.axiProfiling.WDATA
+	inputProfilingWriteDataEb.io.in.valid := io.axiProfiling.WVALID
+	inputProfilingWriteStrbEb.io.in.bits  := io.axiProfiling.WSTRB
+	inputProfilingWriteStrbEb.io.in.valid := io.axiProfiling.WVALID
+	io.axiProfiling.WREADY                := inputProfilingWriteDataEb.io.in.ready & inputProfilingWriteStrbEb.io.in.ready
+	inputProfilingWriteAddrEb.io.in.bits  := io.axiProfiling.AWADDR(log2Ceil(Profiling.dataWidth / 8) + 1, log2Ceil(Profiling.dataWidth / 8))
+	inputProfilingWriteAddrEb.io.in.valid := io.axiProfiling.AWVALID
+	io.axiProfiling.AWREADY               := inputProfilingWriteAddrEb.io.in.ready
+	/* Consume one address and one data only when both are available */
+	inputProfilingWriteDataEb.io.out.ready := inputProfilingWriteAddrEb.io.out.valid & ~io.axiProfiling.BVALID
+	inputProfilingWriteStrbEb.io.out.ready := inputProfilingWriteAddrEb.io.out.valid & ~io.axiProfiling.BVALID
+	inputProfilingWriteAddrEb.io.out.ready := inputProfilingWriteDataEb.io.out.valid & ~io.axiProfiling.BVALID
+	val dataAddrAvailable = inputProfilingWriteAddrEb.io.out.valid & inputProfilingWriteDataEb.io.out.valid & ~io.axiProfiling.BVALID
+
+	val clear      = dataAddrAvailable & (inputProfilingWriteAddrEb.io.out.bits === 0.U) & (inputProfilingWriteDataEb.io.out.bits(0) === 1.U) & inputProfilingWriteStrbEb.io.out.bits.asUInt.andR
+	val snapshot   = dataAddrAvailable & (inputProfilingWriteAddrEb.io.out.bits === 0.U) & (inputProfilingWriteDataEb.io.out.bits(1) === 1.U) & inputProfilingWriteStrbEb.io.out.bits.asUInt.andR
+
+	val reorderBuffers: Array[ReorderBufferIO] =
+	Array.fill(FPGAMSHR.numInputs)(
+		Module(
+			if (FPGAMSHR.useROB)
+				new ReorderBufferAXI(FPGAMSHR.reqAddrWidth, FPGAMSHR.reqDataWidth, FPGAMSHR.reqIdWidth)
+			else
+				new DummyReorderBufferAXI(FPGAMSHR.reqAddrWidth, FPGAMSHR.reqDataWidth, FPGAMSHR.reqIdWidth)
+		).io
+	)
+
+	io.in.zip(reorderBuffers).foreach(x => x._2.in <> x._1)
+	val low0s = log2Ceil(FPGAMSHR.memDataWidth / 8)
+	io.out.zip(reorderBuffers).foreach(x => {
+		x._1.ARADDR  := Cat(x._2.out.ARADDR(FPGAMSHR.reqAddrWidth - 1, low0s), 0.U(low0s.W))
+		x._1.ARVALID := x._2.out.ARVALID
+		x._2.out.ARREADY := x._1.ARREADY
+		x._1.ARID   := x._2.out.ARID
+		x._1.ARLEN   := x._2.out.ARLEN
+		x._1.ARSIZE  := log2Ceil(FPGAMSHR.memDataWidth / 8).U
+		x._1.ARBURST := x._2.out.ARBURST
+		x._1.ARLOCK  := x._2.out.ARLOCK
+		x._1.ARCACHE := x._2.out.ARCACHE
+		x._1.ARPROT  := x._2.out.ARPROT
+		x._2.out.RDATA := x._1.RDATA(log2Ceil(FPGAMSHR.reqDataWidth / 8) - 1, 0)
+		x._2.out.RVALID := x._1.RVALID
+		x._1.RREADY := x._2.out.RREADY
+		x._2.out.RID := x._1.RID
+		x._2.out.RRESP := x._1.RRESP
+		x._2.out.RLAST  := x._1.RLAST
+	})
+
+	/* Profiling */
+	if (Profiling.enable) {
+		val inputProfilingReadEb = Module(new ElasticBuffer(UInt((totalProfilingAddrWidth - log2Ceil(Profiling.dataWidth / 8)).W))) /* We latch the address */
+		inputProfilingReadEb.io.in.bits  := io.axiProfiling.ARADDR(totalProfilingAddrWidth-1, log2Ceil(Profiling.dataWidth / 8))
+		inputProfilingReadEb.io.in.valid := io.axiProfiling.ARVALID
+		io.axiProfiling.ARREADY          := inputProfilingReadEb.io.in.ready
+
+		val totalCycleCounter = ProfilingCounter(true.B, Profiling.dataWidth, snapshot, clear)
+		val cyclesExtMemNotReady = io.out.map(x => ProfilingCounter(x.ARVALID & ~x.ARREADY, Profiling.dataWidth, snapshot, clear))
+		val reqSent = io.out.map(x => ProfilingCounter(x.ARVALID & x.ARREADY, Profiling.dataWidth, snapshot, clear))
+		val respReceived = io.out.map(x => ProfilingCounter(x.ARVALID & x.ARREADY, Profiling.dataWidth, snapshot, clear))
+		// val fpgamshrRegAddr = Wire(DecoupledIO(UInt(Profiling.regAddrWidth.W)))
+		val fpgamshrSubModuleAddr = Wire(DecoupledIO(UInt((Profiling.regAddrWidth + Profiling.subModuleAddrWidth).W)))
+		// val w = fpgamshrSubModuleAddr.bits.getWidth
+		// println(s"fpgamshrSubModuleAddr.bits.getWidth=$w")
+
+		val fpgamshrRegAxiProfiling = Wire(new AXI4LiteReadOnlyProfiling(Profiling.dataWidth, Profiling.regAddrWidth))
+		val fpgamshrProfilingInterface = ProfilingInterface(fpgamshrRegAxiProfiling.axi,
+															Vec(ArrayBuffer(totalCycleCounter) ++ cyclesExtMemNotReady ++ reqSent ++ respReceived))
+		fpgamshrRegAxiProfiling.axi.RDATA  := fpgamshrProfilingInterface.bits
+		fpgamshrRegAxiProfiling.axi.RRESP  := 0.U
+		fpgamshrRegAxiProfiling.axi.RVALID := fpgamshrProfilingInterface.valid
+		fpgamshrProfilingInterface.ready   := fpgamshrRegAxiProfiling.axi.RREADY
+
+		val dummyAxiProfiling = Wire(new AXI4LiteReadOnlyProfiling(Profiling.dataWidth, Profiling.regAddrWidth))
+		dummyAxiProfiling.axi.RDATA   := DontCare
+		dummyAxiProfiling.axi.RRESP   := 0.U
+		dummyAxiProfiling.axi.RVALID  := false.B
+		dummyAxiProfiling.axi.ARREADY := true.B
+
+		val fpgamshrSelector = ProfilingSelector(fpgamshrSubModuleAddr,
+												Array(fpgamshrRegAxiProfiling) ++ Seq.fill(3)(dummyAxiProfiling), snapshot=snapshot, clear=clear)
+		val fpgamshrAxiProfiling = Wire(new AXI4LiteReadOnlyProfiling(Profiling.dataWidth, Profiling.regAddrWidth + Profiling.subModuleAddrWidth))
+		fpgamshrAxiProfiling.axi.RDATA   := fpgamshrSelector.bits
+		fpgamshrAxiProfiling.axi.RRESP   := 0.U
+		fpgamshrAxiProfiling.axi.RVALID  := fpgamshrSelector.valid
+		fpgamshrSelector.ready           := fpgamshrAxiProfiling.axi.RREADY
+		fpgamshrSubModuleAddr.bits       := fpgamshrAxiProfiling.axi.ARADDR
+		fpgamshrSubModuleAddr.valid      := fpgamshrAxiProfiling.axi.ARVALID
+		fpgamshrAxiProfiling.axi.ARREADY := fpgamshrSubModuleAddr.ready
+
+		val subModulesProfilingInterfaces = reorderBuffers.map(_.axiProfiling) ++ Array(fpgamshrAxiProfiling)
+		val globalSelector = ProfilingSelector(inputProfilingReadEb.io.out, subModulesProfilingInterfaces, clear=clear, snapshot=snapshot)
+		val outputProfilingEb = ElasticBuffer(globalSelector)
+		io.axiProfiling.RDATA   := outputProfilingEb.bits
+		io.axiProfiling.RVALID  := outputProfilingEb.valid
+		outputProfilingEb.ready := io.axiProfiling.RREADY
+		io.axiProfiling.RRESP   := 0.U
+		io.axiProfiling.BRESP   := 0.U
+
+		val axiprofBVALID = RegInit(false.B)
+		when (dataAddrAvailable) {
+			axiprofBVALID := true.B
+		}.elsewhen (axiprofBVALID & io.axiProfiling.BREADY) {
+			axiprofBVALID := false.B
+		}
+		io.axiProfiling.BVALID := axiprofBVALID
+	} else {
+		io.axiProfiling.ARREADY := false.B
+		io.axiProfiling.RVALID  := false.B
+		io.axiProfiling.RDATA   := DontCare
+		io.axiProfiling.RRESP   := DontCare
+		io.axiProfiling.AWREADY := false.B
+		io.axiProfiling.WREADY  := false.B
+		io.axiProfiling.BRESP   := 0.U
+		io.axiProfiling.BVALID  := false.B
+	}
+}
+
+/*
+class FPGAMSHR2 extends Module {
 	require(isPow2(FPGAMSHR.reqDataWidth))
 	require(isPow2(FPGAMSHR.memDataWidth))
 	require(isPow2(FPGAMSHR.numInputs))
@@ -434,3 +586,4 @@ class FPGAMSHR extends Module {
 		io.axiProfiling.BVALID  := false.B
 	}
 }
+*/

@@ -79,8 +79,11 @@ class ReorderBufferAXI(addrWidth: Int=ReorderBufferAXI.addrWidth, dataWidth: Int
 
     /* Output data EB (between ROB and accelerator) */
     val inputDataEb = Module(new ElasticBuffer(UInt(dataWidth.W)))
+    // val inputDataEb = Module(new ElasticBuffer(new DataIdIO(dataWidth, idWidth)))
     io.in.RVALID := inputDataEb.io.out.valid
     io.in.RDATA := inputDataEb.io.out.bits
+    // io.in.RDATA := inputDataEb.io.out.bits.data
+    // io.in.RID := inputDataEb.io.out.bits.id
     inputDataEb.io.out.ready := io.in.RREADY
 
     /* Counters */
@@ -153,6 +156,8 @@ class ReorderBufferAXI(addrWidth: Int=ReorderBufferAXI.addrWidth, dataWidth: Int
     dataMemory.io.enb := inputDataEb.io.in.ready
     dataMemory.io.regceb := inputDataEb.io.in.ready
     inputDataEb.io.in.bits := dataMemory.io.doutb
+    // inputDataEb.io.in.bits.data := dataMemory.io.doutb
+    // inputDataEb.io.in.bits.id := currentDataAddress
 
     io.out.RREADY := true.B
 
@@ -259,7 +264,7 @@ class ReorderBufferAXI(addrWidth: Int=ReorderBufferAXI.addrWidth, dataWidth: Int
     io.out.ARPROT := 0.U
     io.in.RLAST := true.B
     io.in.RRESP := 0.U
-    io.out.ARBURST := 0.U
+    io.out.ARBURST := 1.U
     io.out.ARLEN := 0.U
     io.out.ARLOCK := 0.U
     io.out.ARSIZE := log2Ceil(dataWidth / 8).U
