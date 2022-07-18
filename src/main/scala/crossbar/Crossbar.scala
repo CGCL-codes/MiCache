@@ -48,9 +48,15 @@ class Crossbar(
 	val outAddrWidth    = addrWidth - moduleAddrWidth
 	val bitsPerByte     = 8
     val subWordOffWidth = log2Ceil(reqDataWidth / bitsPerByte)
-	val hbmChannelWidth = 28 // i.e. 256MB
-	val offsetWidth     = hbmChannelWidth - subWordOffWidth
+	val offsetWidth     = log2Ceil(memDataWidth / bitsPerByte) - subWordOffWidth
+	val hbmChannelWidth = 28 - subWordOffWidth // i.e. 256MB
 	require(addrWidth >= moduleAddrWidth + offsetWidth)
+
+	val stripTypePerChannel = 2
+	val stripSelWidth = log2Ceil(stripTypePerChannel)
+	val channelSelWidth = moduleAddrWidth - stripSelWidth
+	require(channelSelWidth > 0)
+	require(addrWidth >= channelSelWidth + hbmChannelWidth)
 
 	val io = IO(new Bundle {
 		val ins = Vec(nInputs, new DecAddrIdDecDataIdIO(addrWidth, reqDataWidth, idWidth))
@@ -82,7 +88,8 @@ class Crossbar(
 					val match_conditions =
 						if (nOutputs > 1) {
 							(0 until nOutputs).map(j =>
-								io.ins(i).addr.bits.addr(moduleAddrWidth + offsetWidth - 1, offsetWidth)
+								Cat(io.ins(i).addr.bits.addr(channelSelWidth + hbmChannelWidth - 1, hbmChannelWidth),
+									io.ins(i).addr.bits.addr(stripSelWidth + offsetWidth - 1, offsetWidth)) 
 								=== addrMasks(j).asUInt(moduleAddrWidth.W))
 						} else {
 							Vector(true.B)
@@ -90,7 +97,8 @@ class Crossbar(
 					val addrRegsIn = Array.fill(nOutputs)(Module(new ElasticBuffer(new AddrIdIO(outAddrWidth, outIdWidth))).io)
 					for (j <- 0 until nOutputs) {
 						if (addrWidth > moduleAddrWidth + offsetWidth) {
-							addrRegsIn(j).in.bits.addr := Cat(io.ins(i).addr.bits.addr(addrWidth - 1, moduleAddrWidth + offsetWidth),
+							addrRegsIn(j).in.bits.addr := Cat(io.ins(i).addr.bits.addr(addrWidth - 1, channelSelWidth + hbmChannelWidth),
+																io.ins(i).addr.bits.addr(hbmChannelWidth - 1, stripSelWidth + offsetWidth),
 																io.ins(i).addr.bits.addr(offsetWidth - 1, 0))
 						} else {
 							addrRegsIn(j).in.bits.addr := io.ins(i).addr.bits.addr(offsetWidth - 1, 0)
@@ -115,14 +123,16 @@ class Crossbar(
 					val match_conditions =
 						if (nOutputs > 1) {
 							(0 until nOutputs).map(j =>
-								addrRegsIn(i).out.bits.addr(moduleAddrWidth + offsetWidth - 1, offsetWidth)
+								Cat(addrRegsIn(i).out.bits.addr(channelSelWidth + hbmChannelWidth - 1, hbmChannelWidth),
+									addrRegsIn(i).out.bits.addr(stripSelWidth + offsetWidth - 1, offsetWidth)) 
 								=== addrMasks(j).asUInt(moduleAddrWidth.W))
 						} else {
 							Vector(true.B)
 						}
 					for (j <- 0 until nOutputs) {
 						if (addrWidth > moduleAddrWidth + offsetWidth) {
-							addrArbiters(j).in(i).bits.addr := Cat(addrRegsIn(i).out.bits.addr(addrWidth - 1, moduleAddrWidth + offsetWidth),
+							addrArbiters(j).in(i).bits.addr := Cat(addrRegsIn(i).out.bits.addr(addrWidth - 1, channelSelWidth + hbmChannelWidth),
+																addrRegsIn(i).out.bits.addr(hbmChannelWidth - 1, stripSelWidth + offsetWidth),
 																addrRegsIn(i).out.bits.addr(offsetWidth - 1, 0))
 						} else {
 							addrArbiters(j).in(i).bits.addr := addrRegsIn(i).out.bits.addr(offsetWidth - 1, 0)
@@ -139,14 +149,16 @@ class Crossbar(
 				val match_conditions =
 					if (nOutputs > 1) {
 						(0 until nOutputs).map(j =>
-							io.ins(i).addr.bits.addr(moduleAddrWidth + offsetWidth - 1, offsetWidth)
+							Cat(io.ins(i).addr.bits.addr(channelSelWidth + hbmChannelWidth - 1, hbmChannelWidth),
+								io.ins(i).addr.bits.addr(stripSelWidth + offsetWidth - 1, offsetWidth)) 
 							=== addrMasks(j).asUInt(moduleAddrWidth.W))
 					} else {
 						Vector(true.B)
 					}
 				for (j <- 0 until nOutputs) {
 					if (addrWidth > moduleAddrWidth + offsetWidth) {
-						addrArbiters(j).in(i).bits.addr := Cat(io.ins(i).addr.bits.addr(addrWidth - 1, moduleAddrWidth + offsetWidth),
+						addrArbiters(j).in(i).bits.addr := Cat(io.ins(i).addr.bits.addr(addrWidth - 1, channelSelWidth + hbmChannelWidth),
+															io.ins(i).addr.bits.addr(hbmChannelWidth - 1, stripSelWidth + offsetWidth),
 															io.ins(i).addr.bits.addr(offsetWidth - 1, 0))
 					} else {
 						addrArbiters(j).in(i).bits.addr := io.ins(i).addr.bits.addr(offsetWidth - 1, 0)
@@ -515,4 +527,123 @@ class OneWayCrossbar(nInputs: Int, nOutputs: Int, addrWidth: Int, bankOffset: In
 		   throw new RuntimeException("numLayers must be <= 3")
 	   }
 	}
+}
+
+class OneWayCrossbarGeneric[S <: Data, T <: Data](inType: S, outType: T, nInputs: Int, nOutputs: Int, getAddr: S => UInt, getOutput: S => T, inEb: Boolean=true) extends Module {
+  //require(isPow2(nInputs))
+  require(isPow2(nOutputs))
+  val outSelAddrWidth = log2Ceil(nOutputs)
+
+  val io = IO(new Bundle {
+      val ins = Flipped(Vec(nInputs, DecoupledIO(inType)))
+      val outs = Vec(nOutputs, DecoupledIO(outType))
+  })
+
+  /* OBSOLETE
+   * TODO: update
+   * Address routing system. The central bits of the address select the output
+   * port:
+   * Input address:
+   * ------------------------------------------
+   * | tag |    OUTPUT PORT    | bank offset  |
+   * ------------------------------------------
+   *       |<-outSelAddrWidth->|<-bankOffset->|
+   * Output address:
+   * --------------------------
+   * | tag | cacheline offset |
+   * --------------------------
+   *       |<----clWidth----->|
+   *
+   * The outputs of the ResettableRRArbiters are registered with an elastic buffer.
+   * If inEb is set to true,
+   * elastic buffers are also placed on the inputs (either on the module
+   * inputs or on each ResettableRRArbiter input depending on ebOnArbiterInput).
+   */
+
+    val ebOnArbiterInput = true  /* Place an input elastic buffer at every
+                                     ResettableRRArbiter input instead of every module
+                                     input. Uses much more resources but
+                                     provides best critical path. */
+    val addrMasks = (0 until nOutputs)
+    val addrArbiters = Array.fill(nOutputs)(Module(new ResettableRRArbiter(outType, nInputs)).io)
+    val addrRegsOut = Array.fill(nOutputs)(Module(new ElasticBuffer(outType)).io)
+
+    if(inEb) {
+        if(ebOnArbiterInput) {
+            /* Works but uses a lot of resources... */
+            for (i <- 0 until nInputs) {
+                val match_conditions = if(nOutputs > 1) {
+                                            (0 until nOutputs).map(j => getAddr(io.ins(i).bits) === addrMasks(j).asUInt(outSelAddrWidth.W))
+                                        } else {
+                                            Vector(true.B)
+                                        }
+                val addrRegsIn = Array.fill(nOutputs)(Module(new ElasticBuffer(outType)).io)
+                for (j <- 0 until nOutputs) {
+                    /* Trim away the module address bits (currently, the central ones) */
+                    addrRegsIn(j).in.bits := getOutput(io.ins(i).bits)
+                    /* Append the index of the input port */
+                    addrRegsIn(j).in.valid := match_conditions(j) && io.ins(i).valid
+                    addrArbiters(j).in(i) <> addrRegsIn(j).out
+                }
+                /* If m(i,j) is the match signal between port i and output j
+                 * (match_conditions = m(i,:)) and arb_rdy(i,j) is the ready signal of
+                 * input port i of the arbiter for output j (addrArbiters(j).in(i).ready),
+                 * then the ready for port i is:
+                 * m(i,0) & arb_rdy(i,0) | m(i,1) & arb_rdy(i,1) | ... | m(i,nOutputs-1) & arb_rdy(i,nOutputs-1)
+                 * This is what the obscure one-liner below should compute.
+                 */
+                io.ins(i).ready := Vec(addrRegsIn.zip(match_conditions).map((x) => x._1.in.ready & x._2)).asUInt.orR
+            }
+        } else {
+            val addrRegsIn = Array.fill(nInputs)(Module(new ElasticBuffer(inType)).io)
+            // val addrRegsIn = Array.fill(nInputs)(Module(new Queue(new PayloadIdIO(addrWidth, idWidth), 4)).io)
+            for (i <- 0 until nInputs) {
+                addrRegsIn(i).in <> io.ins(i)
+                val match_conditions = if (nOutputs > 1) {
+                                        (0 until nOutputs).map(j => getAddr(addrRegsIn(i).out.bits) === addrMasks(j).asUInt(outSelAddrWidth.W))
+                                        } else {
+                                            Vector(true.B)
+                                        }
+                for (j <- 0 until nOutputs) {
+                    /* Trim away the module address bits (currently, the central ones) */
+                    addrArbiters(j).in(i).bits := getOutput(addrRegsIn(i).out.bits)
+                    addrArbiters(j).in(i).valid := match_conditions(j) && addrRegsIn(i).out.valid
+                }
+                /* If m(i,j) is the match signal between port i and output j
+                 * (match_conditions = m(i,:)) and arb_rdy(i,j) is the ready signal of
+                 * input port i of the arbiter for output j (addrArbiters(j).in(i).ready),
+                 * then the ready for port i is:
+                 * m(i,0) & arb_rdy(i,0) | m(i,1) & arb_rdy(i,1) | ... | m(i,nOutputs-1) & arb_rdy(i,nOutputs-1)
+                 * This is what the obscure one-liner below should compute.
+                 */
+                addrRegsIn(i).out.ready := Vec(addrArbiters.zip(match_conditions).map((x) => x._1.in(i).ready & x._2)).asUInt.orR
+            }
+        }
+    } else { /* no input elastic buffers */
+        for (i <- 0 until nInputs) {
+            val match_conditions = if(nOutputs > 1) {
+                                        (0 until nOutputs).map(j => getAddr(io.ins(i).bits) === addrMasks(j).asUInt(outSelAddrWidth.W))
+                                    } else {
+                                        Vector(true.B)
+                                    }
+            for (j <- 0 until nOutputs) {
+                /* Trim away the module address bits (currently, the central ones) */
+                addrArbiters(j).in(i).bits := getOutput(io.ins(i).bits)
+                addrArbiters(j).in(i).valid := match_conditions(j) && io.ins(i).valid
+            }
+            /* If m(i,j) is the match signal between port i and output j
+             * (match_conditions = m(i,:)) and arb_rdy(i,j) is the ready signal of
+             * input port i of the arbiter for output j (addrArbiters(j).in(i).ready),
+             * then the ready for port i is:
+             * m(i,0) & arb_rdy(i,0) | m(i,1) & arb_rdy(i,1) | ... | m(i,nOutputs-1) & arb_rdy(i,nOutputs-1)
+             * This is what the obscure one-liner below should compute.
+             */
+            io.ins(i).ready := Vec(addrArbiters.zip(match_conditions).map((x) => x._1.in(i).ready & x._2)).asUInt.orR
+        }
+    }
+
+    for (j <- 0 until nOutputs) {
+        addrRegsOut(j).in <> addrArbiters(j).out
+        io.outs(j) <> addrRegsOut(j).out
+    }
 }

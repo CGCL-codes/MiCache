@@ -7,7 +7,7 @@ import fpgamshr.interfaces._
 import fpgamshr.crossbar.{Crossbar}
 import fpgamshr.reqhandler.cuckoo.{RequestHandlerCuckoo, RequestHandlerBase}
 import fpgamshr.reqhandler.traditional.{RequestHandlerBlockingCache, RequestHandlerTraditionalMSHR}
-import fpgamshr.extmemarbiter.{InOrderExternalMultiPortedMemoryArbiter, ExternalMemoryArbiterBase}
+import fpgamshr.extmemarbiter.{InOrderHybridArbiter, ExternalMemoryArbiterBase}
 import fpgamshr.profiling.{Profiling, ProfilingCounter, ProfilingInterface, ProfilingSelector}
 
 import scala.collection.mutable.ArrayBuffer
@@ -90,13 +90,13 @@ numMemoryPorts=${numMemoryPorts}
 
 	}
 
+// 	def ipName(): String = s"""FPGAMSHR_ra${FPGAMSHR.reqAddrWidth}
+// _id${FPGAMSHR.reqIdWidth}
+// _in${FPGAMSHR.numInputs}
+// ${if (FPGAMSHR.blockOnNextPtr) "_nonextptr" else ""}
+// ${if (FPGAMSHR.sameHashFunction) "_nocuckoo" else ""}
+// _pc${FPGAMSHR.numMemoryPorts}""".replace("\n", "") + (if(FPGAMSHR.useROB) "_rob" else "") + (if(Profiling.enable) "" else "_noprof")
 	def ipName(): String = s"""FPGAMSHR_ra${FPGAMSHR.reqAddrWidth}
-_id${FPGAMSHR.reqIdWidth}
-_in${FPGAMSHR.numInputs}
-${if (FPGAMSHR.blockOnNextPtr) "_nonextptr" else ""}
-${if (FPGAMSHR.sameHashFunction) "_nocuckoo" else ""}
-_pc${FPGAMSHR.numMemoryPorts}""".replace("\n", "") + (if(FPGAMSHR.useROB) "_rob" else "") + (if(Profiling.enable) "" else "_noprof")
-	def ipName2(): String = s"""FPGAMSHR_ra${FPGAMSHR.reqAddrWidth}
 _id${FPGAMSHR.reqIdWidth}
 _in${FPGAMSHR.numInputs}
 _bk${FPGAMSHR.numReqHandlers}
@@ -110,7 +110,7 @@ ${if (FPGAMSHR.blockOnNextPtr) "_nonextptr" else ""}
 ${if (FPGAMSHR.sameHashFunction) "_nocuckoo" else ""}
 _cw${if((FPGAMSHR.cacheSizeBytes > 0) && (FPGAMSHR.numCacheWays > 0)) FPGAMSHR.numCacheWays else 0}
 _csz${if((FPGAMSHR.cacheSizeBytes > 0) && (FPGAMSHR.numCacheWays > 0)) FPGAMSHR.cacheSizeBytes else 0}
-_cpc${FPGAMSHR.numMemoryPorts}""".replace("\n", "") + (if(FPGAMSHR.useROB) "_rob" else "") + (if(Profiling.enable) "" else "_noprof")
+_hybrid${FPGAMSHR.numMemoryPorts}""".replace("\n", "") + (if(FPGAMSHR.useROB) "_rob" else "") + (if(Profiling.enable) "" else "_noprof")
 
 	var reqAddrWidth = 0
 	var memAddrWidth = 0
@@ -148,6 +148,7 @@ _cpc${FPGAMSHR.numMemoryPorts}""".replace("\n", "") + (if(FPGAMSHR.useROB) "_rob
 }
 
 // Only ReorderBuffer
+/*
 class FPGAMSHR extends Module {
 	require(isPow2(FPGAMSHR.reqDataWidth))
 	require(isPow2(FPGAMSHR.memDataWidth))
@@ -291,9 +292,9 @@ class FPGAMSHR extends Module {
 		io.axiProfiling.BVALID  := false.B
 	}
 }
+*/
 
-/*
-class FPGAMSHR2 extends Module {
+class FPGAMSHR extends Module {
 	require(isPow2(FPGAMSHR.reqDataWidth))
 	require(isPow2(FPGAMSHR.memDataWidth))
 	require(isPow2(FPGAMSHR.numInputs))
@@ -483,11 +484,12 @@ class FPGAMSHR2 extends Module {
 			)
 		}
 
-	val numMemPortsPerHandler = FPGAMSHR.numMemoryPorts / FPGAMSHR.numReqHandlers
-	// val extMemArbiters: IndexSeq[ExternalMemoryArbiterBase] =
+	val numStripTypePerPC = 2
+	val numExtMemArbiter = FPGAMSHR.numReqHandlers / numStripTypePerPC
+	val numPCsPerArbiter = FPGAMSHR.numMemoryPorts / numExtMemArbiter
 	val extMemArbiters =
-		for {i <- 0 until FPGAMSHR.numReqHandlers} yield
-			Module(new InOrderExternalMultiPortedMemoryArbiter(
+		for {i <- 0 until numExtMemArbiter} yield
+			Module(new InOrderHybridArbiter(
 				FPGAMSHR.reqAddrWidth,
 				FPGAMSHR.memAddrWidth,
 				FPGAMSHR.memDataWidth,
@@ -495,8 +497,9 @@ class FPGAMSHR2 extends Module {
 				FPGAMSHR.numReqHandlers,
 				FPGAMSHR.memMaxOutstandingReads,
 				FPGAMSHR.memAddrOffset,
-				numMemoryPorts=numMemPortsPerHandler,
-				reqHandlerId=i
+				numMemoryPorts=FPGAMSHR.numMemoryPorts,
+				memArbiterId=i,
+				numStripTypePerPC
 			))
 
 	for (i <- 0 until FPGAMSHR.numReqHandlers) {
@@ -507,11 +510,13 @@ class FPGAMSHR2 extends Module {
 		reqHandlers(i).enableCache            := enableCache
 		// reqHandlers(i).clock2x := io.clock2x
 
-		extMemArbiters(i).io.inReq <> reqHandlers(i).outMemReq
-		reqHandlers(i).inMemResp   <> extMemArbiters(i).io.outResp
+		extMemArbiters(i / numExtMemArbiter).io.inReq(i % numStripTypePerPC) <> reqHandlers(i).outMemReq
+		reqHandlers(i).inMemResp <> extMemArbiters(i / numExtMemArbiter).io.outResp(i % numStripTypePerPC)
+	}
 
-		for (j <- 0 until numMemPortsPerHandler) {
-			extMemArbiters(i).io.outMem(j) <> io.out(i + j * FPGAMSHR.numReqHandlers)
+	for (i <- 0 until numExtMemArbiter) {
+		for (j <- 0 until numPCsPerArbiter) {
+			extMemArbiters(i).io.outMem(j) <> io.out(i + j * numExtMemArbiter)
 		}
 	}
 
@@ -586,4 +591,3 @@ class FPGAMSHR2 extends Module {
 		io.axiProfiling.BVALID  := false.B
 	}
 }
-*/
