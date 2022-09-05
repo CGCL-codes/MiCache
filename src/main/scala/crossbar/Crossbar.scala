@@ -33,6 +33,7 @@ class Crossbar(
 		reqDataWidth: Int=Crossbar.reqDataWidth,
 		memDataWidth: Int=Crossbar.memDataWidth,
 		idWidth:      Int=Crossbar.idWidth,
+		stripTypePC:  Int=2,
 		inEb:         Boolean=true
 ) extends Module {
 	require(isPow2(nInputs))
@@ -52,8 +53,7 @@ class Crossbar(
 	val hbmChannelWidth = 28 - subWordOffWidth // i.e. 256MB
 	require(addrWidth >= moduleAddrWidth + offsetWidth)
 
-	val stripTypePerChannel = 2
-	val stripSelWidth = log2Ceil(stripTypePerChannel)
+	val stripSelWidth = log2Ceil(stripTypePC)
 	val channelSelWidth = moduleAddrWidth - stripSelWidth
 	require(channelSelWidth > 0)
 	require(addrWidth >= channelSelWidth + hbmChannelWidth)

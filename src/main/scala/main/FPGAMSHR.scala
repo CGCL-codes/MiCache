@@ -403,7 +403,8 @@ class FPGAMSHR extends Module {
 		addrWidth    = FPGAMSHR.reqAddrWidth - subWordOffsetWidth,
 		reqDataWidth = FPGAMSHR.reqDataWidth,
 		memDataWidth = FPGAMSHR.memDataWidth,
-		idWidth      = FPGAMSHR.reqIdWidth
+		idWidth      = FPGAMSHR.reqIdWidth,
+		stripTypePC  = FPGAMSHR.numCacheBlockPerPC
 	))
 	val reorderBuffers: Array[ReorderBufferIO] =
 		Array.fill(FPGAMSHR.numInputs)(
