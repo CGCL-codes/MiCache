@@ -59,6 +59,9 @@ object FPGAMSHR {
 		reordExtMemArbiterQueueDepth = fileConfig.getInt("reordExtMemArbiterQueueDepth")
 		numMemoryPorts               = fileConfig.getInt("numMemoryPorts")
 
+		// numCacheBlockPerPC = fileConfig.getInt("numCacheBlockPerPC")
+		numCacheBlockPerPC = numReqHandlers / numMemoryPorts
+
 		println(s"""Configuration list:
 reqAddrWidth=${reqAddrWidth}
 memAddrWidth=${memAddrWidth}
@@ -142,6 +145,8 @@ _hybrid${FPGAMSHR.numMemoryPorts}""".replace("\n", "") + (if(FPGAMSHR.useROB) "_
 	var memMaxOutstandingReads = 0
 	var reordExtMemArbiterQueueDepth = 0
 	var numMemoryPorts = 0
+
+	var numCacheBlockPerPC = 0
 
 	var outputDir = "."
 	val version = 0.11
@@ -300,10 +305,10 @@ class FPGAMSHR extends Module {
 	require(isPow2(FPGAMSHR.numInputs))
 	require(isPow2(FPGAMSHR.numReqHandlers))
 	require(isPow2(FPGAMSHR.numMemoryPorts))
-	require(FPGAMSHR.numMemoryPorts >= FPGAMSHR.numReqHandlers) // for HBM multi-channel
+	// require(FPGAMSHR.numMemoryPorts >= FPGAMSHR.numReqHandlers) // for HBM multi-channel
 
 	/* +1 because of the special section dedicated to the FPGAMSHR, crossbar and external memory arbiter */
-	val totalProfilingAddrWidth = log2Ceil(FPGAMSHR.numReqHandlers + FPGAMSHR.numInputs) + 1 +
+	val totalProfilingAddrWidth = log2Ceil(FPGAMSHR.numReqHandlers + FPGAMSHR.numInputs + 1) +
 									Profiling.regAddrWidth +
 									Profiling.subModuleAddrWidth +
 									log2Ceil(Profiling.dataWidth / 8)
@@ -484,8 +489,7 @@ class FPGAMSHR extends Module {
 			)
 		}
 
-	val numStripTypePerPC = 2
-	val numExtMemArbiter = FPGAMSHR.numReqHandlers / numStripTypePerPC
+	val numExtMemArbiter = FPGAMSHR.numReqHandlers / FPGAMSHR.numCacheBlockPerPC
 	val numPCsPerArbiter = FPGAMSHR.numMemoryPorts / numExtMemArbiter
 	val extMemArbiters =
 		for {i <- 0 until numExtMemArbiter} yield
@@ -499,7 +503,7 @@ class FPGAMSHR extends Module {
 				FPGAMSHR.memAddrOffset,
 				numMemoryPorts=FPGAMSHR.numMemoryPorts,
 				memArbiterId=i,
-				numStripTypePerPC
+				FPGAMSHR.numCacheBlockPerPC
 			))
 
 	for (i <- 0 until FPGAMSHR.numReqHandlers) {
@@ -510,8 +514,8 @@ class FPGAMSHR extends Module {
 		reqHandlers(i).enableCache            := enableCache
 		// reqHandlers(i).clock2x := io.clock2x
 
-		extMemArbiters(i / numExtMemArbiter).io.inReq(i % numStripTypePerPC) <> reqHandlers(i).outMemReq
-		reqHandlers(i).inMemResp <> extMemArbiters(i / numExtMemArbiter).io.outResp(i % numStripTypePerPC)
+		extMemArbiters(i / FPGAMSHR.numCacheBlockPerPC).io.inReq(i % FPGAMSHR.numCacheBlockPerPC) <> reqHandlers(i).outMemReq
+		reqHandlers(i).inMemResp <> extMemArbiters(i / FPGAMSHR.numCacheBlockPerPC).io.outResp(i % FPGAMSHR.numCacheBlockPerPC)
 	}
 
 	for (i <- 0 until numExtMemArbiter) {
