@@ -13,7 +13,7 @@ object Crossbar {
 	val idWidth         = 8
 	val numberOfInputs  = 16
 	val numberOfOutputs = 16
-	val maxArbiterPorts = 16
+	val maxArbiterPorts = 64
 	/** Number of bits that must be added to the ID field to identify the input port */
 	val inputIdWidth    = log2Ceil(numberOfInputs)
 	/** Width of the offset of the data inside the cacheline */
