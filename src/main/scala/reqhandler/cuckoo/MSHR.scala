@@ -57,13 +57,14 @@ class CuckooMSHR(addrWidth: Int=MSHR.addrWidth, numMSHRPerHashTable: Int=MSHR.nu
   val hashTableAddrWidth = log2Ceil(numMSHRPerHashTable)
   val hashMultConstWidth = if (tagWidth > MSHR.maxMultConstWidth) MSHR.maxMultConstWidth else tagWidth
   val hbmChannelWidth = 28 - offsetWidth - log2Ceil(reqDataWidth / 8)
+  val tagHashWidth = if (tagWidth > hbmChannelWidth) hbmChannelWidth else tagWidth
   /*
    * a = positive odd integer on addr.getWidth bits
   https://en.wikipedia.org/wiki/Universal_hashing#Avoiding_modular_arithmetic */
   // def hash(aExponent: Int, b: Int, tag: UInt): UInt = ((tag << aExponent) + tag + b.U)(tagWidth - 1, tagWidth - hashTableAddrWidth)=
   // println(s"tagWidth=$tagWidth, hashTableAddrWidth=$hashTableAddrWidth")
   //def hash(a: Int, b: Int, tag: UInt): UInt = (a.U(hashMultConstWidth.W) * tag + b.U((tagWidth-hashTableAddrWidth).W))(tagWidth - 1, tagWidth - hashTableAddrWidth)
-  def hash(a: Int, b: Int, tag: UInt): UInt = ((a.U(hashMultConstWidth.W) * tag(hbmChannelWidth - 1, 0))(tagWidth - 1, tagWidth - hashTableAddrWidth) + b.U((hashTableAddrWidth).W))
+  def hash(a: Int, b: Int, tag: UInt): UInt = ((a.U(hashMultConstWidth.W) * tag(tagHashWidth - 1, 0))(tagWidth - 1, tagWidth - hashTableAddrWidth) + b.U((hashTableAddrWidth).W))
   /* The way the hash was computed, b was useless anyway, so we can remove it altogether. */
   // def hash(a: Int, tag: UInt): UInt = (a.U(hashMultConstWidth.W) * tag(hbmChannelWidth - 1, 0))(tagWidth - 1, tagWidth - hashTableAddrWidth)
   //def hash2(a1: Int, a2: Int, tag: UInt): UInt = (tag + (tag << a1.U) + (tag << a2.U))(tagWidth - 1, tagWidth - hashTableAddrWidth)

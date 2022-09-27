@@ -33,7 +33,7 @@ class Crossbar(
 		reqDataWidth: Int=Crossbar.reqDataWidth,
 		memDataWidth: Int=Crossbar.memDataWidth,
 		idWidth:      Int=Crossbar.idWidth,
-		stripTypePC:  Int=2,
+		numCBsPerPC:  Int=2,
 		inEb:         Boolean=true
 ) extends Module {
 	require(isPow2(nInputs))
@@ -53,9 +53,9 @@ class Crossbar(
 	val hbmChannelWidth = 28 - subWordOffWidth // i.e. 256MB
 	require(addrWidth >= moduleAddrWidth + offsetWidth)
 
-	val stripSelWidth = log2Ceil(stripTypePC)
-	val channelSelWidth = moduleAddrWidth - stripSelWidth
-	require(channelSelWidth > 0)
+	val cacheSelWidth = log2Ceil(numCBsPerPC)
+	val channelSelWidth = moduleAddrWidth - cacheSelWidth
+	require(channelSelWidth >= 0)
 	require(addrWidth >= channelSelWidth + hbmChannelWidth)
 
 	val io = IO(new Bundle {
@@ -66,10 +66,10 @@ class Crossbar(
 	/* Address routing system for HBM.
 	 *
 	 * Input address:
-	 * ------------------------------------------------xxxxxx
-	 * | tag1 | OUTPUT PORT | tag2 | cacheline offset | sub x
-	 * ------------------------------------------------xxxxxx
-	 *                      |<----width of HBM channels---->|
+	 * --------------------------------------------------xxxxxx
+	 * | tag1 | pcSel | tag2 | cbSel | cacheline offset | sub x
+	 * --------------------------------------------------xxxxxx
+	 *                |<--------width of HBM channels-------->|
 	 * Output address:
 	 * --------------------------------------
 	 * | tag(tag1++tag2) | cacheline offset |
@@ -87,19 +87,44 @@ class Crossbar(
 				for (i <- 0 until nInputs) {
 					val match_conditions =
 						if (nOutputs > 1) {
-							(0 until nOutputs).map(j =>
-								Cat(io.ins(i).addr.bits.addr(channelSelWidth + hbmChannelWidth - 1, hbmChannelWidth),
-									io.ins(i).addr.bits.addr(stripSelWidth + offsetWidth - 1, offsetWidth)) 
-								=== addrMasks(j).asUInt(moduleAddrWidth.W))
+							if (channelSelWidth > 0) {
+								if (cacheSelWidth > 0) {
+									(0 until nOutputs).map(j =>
+										Cat(io.ins(i).addr.bits.addr(channelSelWidth + hbmChannelWidth - 1, hbmChannelWidth),
+											io.ins(i).addr.bits.addr(cacheSelWidth + offsetWidth - 1, offsetWidth))
+										=== addrMasks(j).asUInt(moduleAddrWidth.W))
+								} else {
+									(0 until nOutputs).map(j =>
+										io.ins(i).addr.bits.addr(channelSelWidth + hbmChannelWidth - 1, hbmChannelWidth)
+										=== addrMasks(j).asUInt(moduleAddrWidth.W))
+								}
+							} else {
+								(0 until nOutputs).map(j =>
+									io.ins(i).addr.bits.addr(cacheSelWidth + offsetWidth - 1, offsetWidth)
+									=== addrMasks(j).asUInt(moduleAddrWidth.W))
+							}
 						} else {
 							Vector(true.B)
 						}
 					val addrRegsIn = Array.fill(nOutputs)(Module(new ElasticBuffer(new AddrIdIO(outAddrWidth, outIdWidth))).io)
 					for (j <- 0 until nOutputs) {
 						if (addrWidth > moduleAddrWidth + offsetWidth) {
-							addrRegsIn(j).in.bits.addr := Cat(io.ins(i).addr.bits.addr(addrWidth - 1, channelSelWidth + hbmChannelWidth),
-																io.ins(i).addr.bits.addr(hbmChannelWidth - 1, stripSelWidth + offsetWidth),
-																io.ins(i).addr.bits.addr(offsetWidth - 1, 0))
+							if (channelSelWidth > 0) {
+								if (addrWidth > channelSelWidth + hbmChannelWidth) {
+									addrRegsIn(j).in.bits.addr := 
+										Cat(io.ins(i).addr.bits.addr(addrWidth - 1, channelSelWidth + hbmChannelWidth),
+											io.ins(i).addr.bits.addr(hbmChannelWidth - 1, cacheSelWidth + offsetWidth),
+											io.ins(i).addr.bits.addr(offsetWidth - 1, 0))
+								} else {	// in this case tag1's width is zero
+									addrRegsIn(j).in.bits.addr :=
+										Cat(io.ins(i).addr.bits.addr(hbmChannelWidth - 1, cacheSelWidth + offsetWidth),
+											io.ins(i).addr.bits.addr(offsetWidth - 1, 0))
+								}
+							} else {
+								addrRegsIn(j).in.bits.addr := 
+									Cat(io.ins(i).addr.bits.addr(addrWidth - 1, cacheSelWidth + offsetWidth),
+										io.ins(i).addr.bits.addr(offsetWidth - 1, 0))
+							}
 						} else {
 							addrRegsIn(j).in.bits.addr := io.ins(i).addr.bits.addr(offsetWidth - 1, 0)
 						}
@@ -116,7 +141,7 @@ class Crossbar(
 					 */
 					io.ins(i).addr.ready := Vec(addrRegsIn.zip(match_conditions).map((x) => x._1.in.ready & x._2)).asUInt.orR
 				}
-			} else {
+			}/* else {
 				val addrRegsIn = Array.fill(nInputs)(Module(new ElasticBuffer(new AddrIdIO(addrWidth, idWidth))).io)
 				for (i <- 0 until nInputs) {
 					addrRegsIn(i).in <> io.ins(i).addr
@@ -124,7 +149,7 @@ class Crossbar(
 						if (nOutputs > 1) {
 							(0 until nOutputs).map(j =>
 								Cat(addrRegsIn(i).out.bits.addr(channelSelWidth + hbmChannelWidth - 1, hbmChannelWidth),
-									addrRegsIn(i).out.bits.addr(stripSelWidth + offsetWidth - 1, offsetWidth)) 
+									addrRegsIn(i).out.bits.addr(cacheSelWidth + offsetWidth - 1, offsetWidth)) 
 								=== addrMasks(j).asUInt(moduleAddrWidth.W))
 						} else {
 							Vector(true.B)
@@ -132,7 +157,7 @@ class Crossbar(
 					for (j <- 0 until nOutputs) {
 						if (addrWidth > moduleAddrWidth + offsetWidth) {
 							addrArbiters(j).in(i).bits.addr := Cat(addrRegsIn(i).out.bits.addr(addrWidth - 1, channelSelWidth + hbmChannelWidth),
-																addrRegsIn(i).out.bits.addr(hbmChannelWidth - 1, stripSelWidth + offsetWidth),
+																addrRegsIn(i).out.bits.addr(hbmChannelWidth - 1, cacheSelWidth + offsetWidth),
 																addrRegsIn(i).out.bits.addr(offsetWidth - 1, 0))
 						} else {
 							addrArbiters(j).in(i).bits.addr := addrRegsIn(i).out.bits.addr(offsetWidth - 1, 0)
@@ -150,7 +175,7 @@ class Crossbar(
 					if (nOutputs > 1) {
 						(0 until nOutputs).map(j =>
 							Cat(io.ins(i).addr.bits.addr(channelSelWidth + hbmChannelWidth - 1, hbmChannelWidth),
-								io.ins(i).addr.bits.addr(stripSelWidth + offsetWidth - 1, offsetWidth)) 
+								io.ins(i).addr.bits.addr(cacheSelWidth + offsetWidth - 1, offsetWidth)) 
 							=== addrMasks(j).asUInt(moduleAddrWidth.W))
 					} else {
 						Vector(true.B)
@@ -158,7 +183,7 @@ class Crossbar(
 				for (j <- 0 until nOutputs) {
 					if (addrWidth > moduleAddrWidth + offsetWidth) {
 						addrArbiters(j).in(i).bits.addr := Cat(io.ins(i).addr.bits.addr(addrWidth - 1, channelSelWidth + hbmChannelWidth),
-															io.ins(i).addr.bits.addr(hbmChannelWidth - 1, stripSelWidth + offsetWidth),
+															io.ins(i).addr.bits.addr(hbmChannelWidth - 1, cacheSelWidth + offsetWidth),
 															io.ins(i).addr.bits.addr(offsetWidth - 1, 0))
 					} else {
 						addrArbiters(j).in(i).bits.addr := io.ins(i).addr.bits.addr(offsetWidth - 1, 0)
@@ -168,7 +193,7 @@ class Crossbar(
 					addrArbiters(j).in(i).valid     := match_conditions(j) && io.ins(i).addr.valid
 				}
 				io.ins(i).addr.ready := Vec(addrArbiters.zip(match_conditions).map((x) => x._1.in(i).ready & x._2)).asUInt.orR
-			}
+			}*/
 		}
 
 		for (j <- 0 until nOutputs) {

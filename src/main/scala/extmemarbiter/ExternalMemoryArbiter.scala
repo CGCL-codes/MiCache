@@ -63,7 +63,7 @@ class ExternalMemoryArbiterBase(
 		memIdWidth:     Int,
 		numReqHandlers: Int,
 		numMemoryPorts: Int,
-		numStripType:   Int
+		numCBsPerPC:    Int
 ) extends Module {
 	require(isPow2(memDataWidth))
 	require(isPow2(numMemoryPorts))
@@ -71,20 +71,20 @@ class ExternalMemoryArbiterBase(
 	val hbmChannelWidth  = 28 // i.e. 256MB
 	val offsetWidth      = log2Ceil(memDataWidth / bitsPerByte)
 	val handlerAddrWidth = log2Ceil(numReqHandlers)
-	val stripSelWidth    = log2Ceil(numStripType)
-	val channelSelWidth  = handlerAddrWidth - stripSelWidth
+	val cacheSelWidth    = log2Ceil(numCBsPerPC)
+	val channelSelWidth  = handlerAddrWidth - cacheSelWidth
 	val tag1Width        = reqAddrWidth - channelSelWidth - hbmChannelWidth
-	val tag2Width        = hbmChannelWidth - stripSelWidth - offsetWidth
+	val tag2Width        = hbmChannelWidth - cacheSelWidth - offsetWidth
 	val tagWidth         = tag1Width + tag2Width
 	val fullTagWidth     = reqAddrWidth - offsetWidth
 	val numIds           = 1 << memIdWidth
 	val channelAddrWidth = log2Ceil(numMemoryPorts)
-	val numPCsPerArbiter = numMemoryPorts / (numReqHandlers / numStripType)
+	val numPCsPerArbiter = numMemoryPorts / (numReqHandlers / numCBsPerPC)
 
 	val io = IO(new Bundle {
-		val inReq   = Flipped(Vec(numStripType, DecoupledIO(UInt(tagWidth.W))))
+		val inReq   = Flipped(Vec(numCBsPerPC, DecoupledIO(UInt(tagWidth.W))))
 		val outMem  = Flipped(Vec(numPCsPerArbiter, new AXI4FullReadOnly(UInt(memDataWidth.W), memAddrWidth, memIdWidth)))
-		val outResp = Vec(numStripType, DecoupledIO(new AddrDataIO(tagWidth, memDataWidth)))
+		val outResp = Vec(numCBsPerPC, DecoupledIO(new AddrDataIO(tagWidth, memDataWidth)))
 	})
 
 	io.outMem.foreach(x => {
@@ -209,23 +209,45 @@ class InOrderHybridArbiter(
 		memAddrOffset:       Long=ExternalMemoryArbiter.memAddrOffset,
 		numMemoryPorts:      Int=InOrderHybridArbiter.numMemoryPorts,
 		memArbiterId:        Int,
-		numStripType:        Int
-) extends ExternalMemoryArbiterBase(reqAddrWidth, memAddrWidth, memDataWidth, memIdWidth, numReqHandlers, numMemoryPorts, numStripType) {
+		numCBsPerPC:         Int
+) extends ExternalMemoryArbiterBase(reqAddrWidth, memAddrWidth, memDataWidth, memIdWidth, numReqHandlers, numMemoryPorts, numCBsPerPC) {
 	require(isPow2(numMemoryPorts))
 	// val hbmChannelWidth  = 28 // i.e. 256MB
 	require(memAddrWidth >= channelAddrWidth + hbmChannelWidth)
 	
-	val inReqWithFullAddrs = Wire(Vec(numStripType, DecoupledIO(UInt(fullTagWidth.W))))
-	for (i <- 0 until numStripType) {
+	val inReqWithFullAddrs = Wire(Vec(numCBsPerPC, DecoupledIO(UInt(fullTagWidth.W))))
+	for (i <- 0 until numCBsPerPC) {
 		inReqWithFullAddrs(i).valid := io.inReq(i).valid
 		io.inReq(i).ready := inReqWithFullAddrs(i).ready
-		if (numStripType > 1) {
-			inReqWithFullAddrs(i).bits := Cat(io.inReq(i).bits(tagWidth - 1, tag2Width),
-												memArbiterId.U(channelSelWidth.W),
-												io.inReq(i).bits(tag2Width - 1, 0),
-												i.U(stripSelWidth.W))
+		if (channelSelWidth > 0) {
+			if (cacheSelWidth > 0) {
+				if (tag1Width > 0) {
+					inReqWithFullAddrs(i).bits := Cat(io.inReq(i).bits(tagWidth - 1, tag2Width),
+														memArbiterId.U(channelSelWidth.W),
+														io.inReq(i).bits(tag2Width - 1, 0),
+														i.U(cacheSelWidth.W))
+				} else {
+					inReqWithFullAddrs(i).bits := Cat(memArbiterId.U(channelSelWidth.W),
+														io.inReq(i).bits(tag2Width - 1, 0),
+														i.U(cacheSelWidth.W))
+				}
+			} else {
+				if (tag1Width > 0) {
+					inReqWithFullAddrs(i).bits := Cat(io.inReq(i).bits(tagWidth - 1, tag2Width),
+														memArbiterId.U(channelSelWidth.W),
+														io.inReq(i).bits(tag2Width - 1, 0))
+				} else {
+					inReqWithFullAddrs(i).bits := Cat(memArbiterId.U(channelSelWidth.W),
+														io.inReq(i).bits(tag2Width - 1, 0))
+				}
+			}
 		} else {
-			inReqWithFullAddrs(i).bits := io.inReq(i).bits
+			if (cacheSelWidth > 0) {
+				inReqWithFullAddrs(i).bits := Cat(io.inReq(i).bits(tagWidth - 1, 0),
+													i.U(cacheSelWidth.W))
+			} else {
+				inReqWithFullAddrs(i).bits := io.inReq(i).bits
+			}
 		}
 	}
 
@@ -245,7 +267,7 @@ class InOrderHybridArbiter(
 	val addrCrossbar = Module(new OneWayCrossbarGeneric(
 		addrCrossbarType,
 		addrCrossbarType,
-		numStripType,
+		numCBsPerPC,
 		numPCsPerArbiter,
 		(addrIn: UInt) => addrIn(channelAddrWidth + hbmChannelWidth - offsetWidth - 1, channelSelWidth + hbmChannelWidth - offsetWidth),
 		(addrOut: UInt) => addrOut
@@ -278,13 +300,21 @@ class InOrderHybridArbiter(
 		dataCrossbarInputType,
 		dataCrossbarOutputType,
 		numPCsPerArbiter,
-		numStripType,
-		(mgrPort: AddrDataIO) => mgrPort.addr(stripSelWidth - 1, 0),
+		numCBsPerPC,
+		(mgrPort: AddrDataIO) => mgrPort.addr(cacheSelWidth - 1, 0),
 		(mgrPort: AddrDataIO) => {
 			val output = Wire(dataCrossbarOutputType)
 			output.data := mgrPort.data
-			output.addr := Cat(mgrPort.addr(fullTagWidth - 1, fullTagWidth - tag1Width),
-								mgrPort.addr(tag2Width + stripSelWidth - 1, stripSelWidth))
+			if (channelSelWidth > 0) {
+				if (tag1Width > 0) {
+					output.addr := Cat(mgrPort.addr(fullTagWidth - 1, fullTagWidth - tag1Width),
+										mgrPort.addr(tag2Width + cacheSelWidth - 1, cacheSelWidth))
+				} else {
+					output.addr := Cat(mgrPort.addr(tag2Width + cacheSelWidth - 1, cacheSelWidth))
+				}
+			} else {
+				output.addr := Cat(mgrPort.addr(fullTagWidth - 1, cacheSelWidth))
+			}
 			output
 		}
 	))
