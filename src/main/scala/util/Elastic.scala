@@ -13,15 +13,39 @@ object ElasticBuffer {
 
 }
 
+// class ElasticBuffer[T <: Data](gen: T) extends Module {
+//     val io = IO(new Bundle {
+//         val in = Flipped(DecoupledIO(gen))
+//         val out = DecoupledIO(gen)
+//     })
+
+//     val fullBuffer = Module(new ElasticBufferRegExport(gen))
+//     fullBuffer.io.in <> io.in
+//     io.out <> fullBuffer.io.out
+// }
+
 class ElasticBuffer[T <: Data](gen: T) extends Module {
     val io = IO(new Bundle {
         val in = Flipped(DecoupledIO(gen))
         val out = DecoupledIO(gen)
     })
 
-    val fullBuffer = Module(new ElasticBufferRegExport(gen))
-    fullBuffer.io.in <> io.in
-    io.out <> fullBuffer.io.out
+    val outerRegData  = Reg(gen)
+    val outerRegValid = RegInit(false.B)
+    val innerRegData  = Reg(gen)
+    val innerRegValid = RegInit(false.B)
+    val readyReg      = RegInit(false.B)
+
+    when (readyReg === true.B) {
+        outerRegData  := io.in.bits
+        innerRegData  := outerRegData
+        outerRegValid := io.in.valid
+        innerRegValid := outerRegValid & ~(io.out.ready | ~io.out.valid)
+    }
+    io.out.bits := Mux(readyReg === true.B, outerRegData, innerRegData)
+    io.out.valid := Mux(readyReg === true.B, outerRegValid, innerRegValid)
+    readyReg := io.out.ready | ~io.out.valid
+    io.in.ready := readyReg
 }
 
 class ElasticBufferRegExport[T <: Data](gen: T) extends Module {
