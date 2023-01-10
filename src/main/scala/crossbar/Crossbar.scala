@@ -1,9 +1,10 @@
 package fpgamshr.crossbar
 
 import chisel3._
-import chisel3.util.{DecoupledIO, log2Ceil, Cat, isPow2, Queue}
+import chisel3.util.{DecoupledIO, log2Ceil, Cat, isPow2, Queue, LFSR16, ValidIO}
 import fpgamshr.util.{ElasticBuffer, ResettableRRArbiter}
-import fpgamshr.interfaces.{DecAddrIdDecDataIdIO, AddrIdIO, DataIdIO, AXI4FullReadOnly}
+import fpgamshr.interfaces.{DecAddrIdDecDataIdIO, AddrIdIO, DataIdIO, AXI4FullReadOnly, BindIdIO}
+import scala.math.{pow}
 import scala.language.reflectiveCalls
 
 object Crossbar {
@@ -26,7 +27,7 @@ object Crossbar {
 	val outIdWidth      = idWidth + inputIdWidth
 }
 
-class Crossbar(
+class CrossbarBase(
 		nInputs:      Int=Crossbar.numberOfInputs,
 		nOutputs:     Int=Crossbar.numberOfOutputs,
 		addrWidth:    Int=Crossbar.addressWidth,
@@ -62,6 +63,18 @@ class Crossbar(
 		val ins = Vec(nInputs, new DecAddrIdDecDataIdIO(addrWidth, reqDataWidth, idWidth))
 		val outs = Flipped(Vec(nOutputs, new DecAddrIdDecDataIdIO(outAddrWidth, reqDataWidth, outIdWidth)))
 	})
+}
+
+class Crossbar(
+		nInputs:      Int=Crossbar.numberOfInputs,
+		nOutputs:     Int=Crossbar.numberOfOutputs,
+		addrWidth:    Int=Crossbar.addressWidth,
+		reqDataWidth: Int=Crossbar.reqDataWidth,
+		memDataWidth: Int=Crossbar.memDataWidth,
+		idWidth:      Int=Crossbar.idWidth,
+		numCBsPerPC:  Int=2,
+		inEb:         Boolean=true
+) extends CrossbarBase(nInputs, nOutputs, addrWidth, reqDataWidth, memDataWidth, idWidth, numCBsPerPC, inEb) {
 
 	/* Address routing system for HBM.
 	 *
@@ -671,4 +684,508 @@ class OneWayCrossbarGeneric[S <: Data, T <: Data](inType: S, outType: T, nInputs
         addrRegsOut(j).in <> addrArbiters(j).out
         io.outs(j) <> addrRegsOut(j).out
     }
+}
+
+class MuxGeneric[S <: Data, T <: Data](
+		inType:     BindIdIO[S],
+		rawOutType: T,
+		nInputs:    Int,
+		getOutput:  S => T,
+		srcId:      Boolean=false,
+		inEb:       Boolean=true
+) extends Module {
+	val addrSelWidth = log2Ceil(nInputs)
+	val outIdWidth = if (srcId) inType.idWidth + addrSelWidth else 0
+	val outType = new BindIdIO(rawOutType, outIdWidth)
+	val io = IO(new Bundle {
+		val ins = Flipped(Vec(nInputs, DecoupledIO(inType)))
+		val out = DecoupledIO(outType)
+	})
+
+	val addrArbiter = Module(new ResettableRRArbiter(outType, nInputs)).io
+	if (inEb) {
+		val addrRegsIn = Array.fill(nInputs)(Module(new ElasticBuffer(inType)).io)
+		for (i <- 0 until nInputs) {
+			addrRegsIn(i).in <> io.ins(i)
+			val srcInputId = if (srcId) Cat(i.U(addrSelWidth.W), addrRegsIn(i).out.bits.id) else DontCare
+			addrArbiter.in(i).bits.id  := srcInputId
+			addrArbiter.in(i).bits.raw := getOutput(addrRegsIn(i).out.bits.raw)
+			addrArbiter.in(i).valid    := addrRegsIn(i).out.valid
+			addrRegsIn(i).out.ready    := addrArbiter.in(i).ready
+		}
+	} else {
+		for (i <- 0 until nInputs) {
+			val srcInputId = if (srcId) Cat(i.U(addrSelWidth.W), io.ins(i).bits.id) else DontCare
+			addrArbiter.in(i).bits.id  := srcInputId
+			addrArbiter.in(i).bits.raw := getOutput(io.ins(i).bits.raw)
+			addrArbiter.in(i).valid    := io.ins(i).valid
+			io.ins(i).ready            := addrArbiter.in(i).ready
+		}
+	}
+	val addrRegOut = Module(new ElasticBuffer(outType)).io
+	addrRegOut.in <> addrArbiter.out
+	io.out <> addrRegOut.out
+}
+
+class DemuxGeneric[S <: Data, T <: Data](
+		inType:     BindIdIO[S],
+		rawOutType: T,
+		nOutputs:   Int,
+		getAddr:    S => UInt,
+		getOutput:  S => T,
+		srcId:      Boolean=false,
+		inEb:       Boolean=true
+) extends Module {
+	val addrSelWidth = log2Ceil(nOutputs)
+	val outType = new BindIdIO(rawOutType, if (srcId) inType.idWidth else 0) // only one input, append no additional ID bits
+	val io = IO(new Bundle {
+		val in = Flipped(DecoupledIO(inType))
+		val outs = Vec(nOutputs, DecoupledIO(outType))
+	})
+
+	val addrMasks = (0 until nOutputs)
+	val addrRegsOut = Array.fill(nOutputs)(Module(new ElasticBuffer(outType)).io)
+
+	if (inEb) {
+		val addrRegIn = Module(new ElasticBuffer(inType)).io
+		addrRegIn.in <> io.in
+		val matchs = (0 until nOutputs).map((j) => getAddr(addrRegIn.out.bits.raw) === addrMasks(j).asUInt(addrSelWidth.W))
+		for (i <- 0 until nOutputs) {
+			val srcInputId = if (srcId) addrRegIn.out.bits.id else DontCare
+			addrRegsOut(i).in.bits.id  := srcInputId
+			addrRegsOut(i).in.bits.raw := getOutput(addrRegIn.out.bits.raw)
+			addrRegsOut(i).in.valid    := matchs(i) && addrRegIn.out.valid
+		}
+		addrRegIn.out.ready := Vec(addrRegsOut.zip(matchs).map((x) => x._1.in.ready & x._2)).asUInt.orR
+	} else {
+		val matchs = (0 until nOutputs).map((j) => getAddr(io.in.bits.raw) === addrMasks(j).asUInt(addrSelWidth.W))
+		for (i <- 0 until nOutputs) {
+			val srcInputId = if (srcId) io.in.bits.id else DontCare
+			addrRegsOut(i).in.bits.id  := srcInputId
+			addrRegsOut(i).in.bits.raw := getOutput(io.in.bits.raw)
+			addrRegsOut(i).in.valid    := matchs(i) && io.in.valid
+		}
+		io.in.ready := Vec(addrRegsOut.zip(matchs).map((x) => x._1.in.ready & x._2)).asUInt.orR
+	}
+
+	addrRegsOut.map(_.out).zip(io.outs).foreach {
+		case(x, y) => x <> y
+	}
+}
+
+class UnitSwitch[S <: Data, T <: Data](
+		inType:     BindIdIO[S],
+		rawOutType: T,
+		numPorts:   Int,
+		getAddr:    S => UInt,
+		getOutput:  S => T,
+		srcId:      Boolean=false,
+		inEb:       Boolean=true
+) extends Module {
+	require(numPorts > 1)	// otherwise a switch makes no sense
+	val addrSelWidth = log2Ceil(numPorts)
+	val outIdWidth = if (srcId) inType.idWidth + addrSelWidth else 0
+	val outType = new BindIdIO(rawOutType, outIdWidth)
+	val io = IO(new Bundle {
+		val ins = Flipped(Vec(numPorts, DecoupledIO(inType)))
+		val outs = Vec(numPorts, DecoupledIO(outType))
+	})
+
+	// here addr means port number
+	val addrMasks = (0 until numPorts)
+	val addrArbiters = Array.fill(numPorts)(Module(new ResettableRRArbiter(outType, numPorts)).io)
+	val ebOnArbiterInput = false
+
+	if (inEb) {
+		if (ebOnArbiterInput) {
+			for (i <- 0 until numPorts) {
+				val matchs = (0 until numPorts).map((j) => getAddr(io.ins(i).bits.raw) === addrMasks(j).asUInt(addrSelWidth.W))
+				val addrRegsIn = Array.fill(numPorts)(Module(new ElasticBuffer(outType)).io)
+				for (j <- 0 until numPorts) {
+					val srcInputId = if (srcId) Cat(i.U(addrSelWidth.W), io.ins(i).bits.id) else DontCare
+					addrRegsIn(j).in.bits.id  := srcInputId
+					addrRegsIn(j).in.bits.raw := getOutput(io.ins(i).bits.raw)
+					addrRegsIn(j).in.valid    := matchs(j) && io.ins(i).valid
+					addrArbiters(j).in(i) <> addrRegsIn(j).out
+				}
+				io.ins(i).ready := Vec(addrRegsIn.zip(matchs).map((x) => x._1.in.ready & x._2)).asUInt.orR
+			}
+		} else {
+			val addrRegsIn = Array.fill(numPorts)(Module(new ElasticBuffer(inType)).io)
+			for (i <- 0 until numPorts) {
+				addrRegsIn(i).in <> io.ins(i)
+				val matchs = (0 until numPorts).map((j) => getAddr(addrRegsIn(i).out.bits.raw) === addrMasks(j).asUInt(addrSelWidth.W))
+				for (j <- 0 until numPorts) {
+					val srcInputId = if (srcId) Cat(i.U(addrSelWidth.W), addrRegsIn(i).out.bits.id) else DontCare
+					addrArbiters(j).in(i).bits.id  := srcInputId
+					addrArbiters(j).in(i).bits.raw := getOutput(addrRegsIn(i).out.bits.raw)
+					addrArbiters(j).in(i).valid    := matchs(j) && addrRegsIn(i).out.valid
+				}
+				addrRegsIn(i).out.ready := Vec(addrArbiters.zip(matchs).map((x) => x._1.in(i).ready & x._2)).asUInt.orR
+			}
+		}
+	} else {
+		for (i <- 0 until numPorts) {
+			val matchs = (0 until numPorts).map((j) => getAddr(io.ins(i).bits.raw) === addrMasks(j).asUInt(addrSelWidth.W))
+			for (j <- 0 until numPorts) {
+				val srcInputId = if (srcId) Cat(i.U(addrSelWidth.W), io.ins(i).bits.id) else DontCare
+				addrArbiters(j).in(i).bits.id  := srcInputId
+				addrArbiters(j).in(i).bits.raw := getOutput(io.ins(i).bits.raw)
+				addrArbiters(j).in(i).valid    := matchs(j) && io.ins(i).valid
+			}
+			io.ins(i).ready := Vec(addrArbiters.zip(matchs).map((x) => x._1.in(i).ready & x._2)).asUInt.orR
+		}
+	}
+
+	val addrRegsOut = Array.fill(numPorts)(Module(new ElasticBuffer(outType)).io)
+	for (j <- 0 until numPorts) {
+		addrRegsOut(j).in <> addrArbiters(j).out
+		io.outs(j)        <> addrRegsOut(j).out
+	}
+}
+
+// Symmetric (i.e. nInputs == nOutputs) switch network
+class MultilayerSwitch[S <: Data, T <: Data](
+		inType:     BindIdIO[S],
+		rawOutType: T,
+		numPorts:   Int,
+		getAddr:    S => UInt,
+		getOutput:  S => T,
+		srcId:      Boolean=false,
+		inEb:       Boolean=true,
+		interInEb:  Boolean=false
+) extends Module {
+	require(isPow2(numPorts))
+	val addrSelWidth = log2Ceil(numPorts)
+	val outIdWidth = if (srcId) inType.idWidth + addrSelWidth else 0
+	val outType = new BindIdIO(rawOutType, outIdWidth)
+	val io = IO(new Bundle {
+		val ins = Flipped(Vec(numPorts, DecoupledIO(inType)))
+		val outs = Vec(numPorts, DecoupledIO(outType))
+	})
+
+	if (numPorts > 1) {
+		val numSwitchPorts = if ((log2Ceil(numPorts) % 2) == 0) 4 else 2
+		val portSelWidth = log2Ceil(numSwitchPorts)
+		val numSwitchPerLayer = numPorts / numSwitchPorts
+		val numLayers = math.ceil(math.log10(numPorts)/math.log10(numSwitchPorts)).toInt
+		require(numLayers > 0)
+
+		val rawInType = inType.raw.cloneType
+		val ioTypes = Array.ofDim[BindIdIO[S]](numLayers) // for convenience
+		ioTypes(0) = inType.cloneType
+		for (i <- 1 until numLayers) {
+			ioTypes(i) = new BindIdIO(rawInType, if (srcId) ioTypes(i - 1).idWidth + portSelWidth else 0)
+		}
+		val switchsLastLayer = Array.fill(numSwitchPerLayer)( // pick it out because we need to convert the IO types here
+			Module(new UnitSwitch(
+				ioTypes(numLayers - 1), rawOutType, numSwitchPorts,
+				(in: S) => getAddr(in)(numLayers * portSelWidth - 1, (numLayers - 1) * portSelWidth),
+				getOutput,
+				srcId,
+				if (numLayers > 1) interInEb else inEb // place no buffer if not the first layer
+			))
+		)
+		for (i <- 0 until numPorts) { // output
+			io.outs(i) <> switchsLastLayer(i % numSwitchPerLayer).io.outs(i / numSwitchPerLayer)
+		}
+		if (numLayers > 1) {
+			val switchs = Array.ofDim[UnitSwitch[S, S]](numLayers - 1, numSwitchPerLayer)
+			for (i <- 0 until numLayers - 1) {
+				for (j <- 0 until numSwitchPerLayer) {
+					switchs(i)(j) = Module(new UnitSwitch(
+						ioTypes(i), rawInType, numSwitchPorts,
+						(in: S) => getAddr(in)((i + 1) * portSelWidth - 1, i * portSelWidth),
+						(out: S) => out,
+						srcId,
+						if (i == 0) inEb else interInEb // place no buffer if not the first layer
+					))
+				}
+			}
+			// inter-layer
+			for (layer <- 0 until numLayers - 1) {
+				for (i <- 0 until numSwitchPerLayer) {
+					val pow1 = pow(numSwitchPorts, layer).toInt
+					val pow2 = pow(numSwitchPorts, layer + 1).toInt
+					for (p <- 0 until numSwitchPorts) {
+						val destSwitch = (i % pow1) + (i - i % pow2) + (p * pow1)
+						val destPort = i / pow1 % numSwitchPorts
+						if (layer == numLayers - 1 - 1) {
+							switchs(layer)(i).io.outs(p) <> switchsLastLayer(destSwitch).io.ins(destPort)
+						} else {
+							switchs(layer)(i).io.outs(p) <> switchs(layer + 1)(destSwitch).io.ins(destPort)
+						}
+					}
+				}
+			}
+			for (i <- 0 until numPorts) { // input
+				io.ins(i) <> switchs(0)(i / numSwitchPorts).io.ins(i % numSwitchPorts)
+			}
+		} else {
+			for (i <- 0 until numPorts) { // input
+				io.ins(i) <> switchsLastLayer(i / numSwitchPorts).io.ins(i % numSwitchPorts)
+			}
+		}
+	} else {
+		val srcInputId = if (srcId) io.ins(0).bits.id else DontCare
+		io.outs(0).bits.id  := srcInputId
+		io.outs(0).bits.raw := getOutput(io.ins(0).bits.raw)
+		io.outs(0).valid    := io.ins(0).valid
+		io.ins(0).ready     := io.outs(0).ready		
+	}
+}
+
+/*
+Multi-layer crossbar with generic IO types. Routing via a symmetric network
+formed by a switch array, and an array of mux/demux (single in/out crossbar)
+to handle asymmetric situation, the mlcxb attempts to take up less resources.
+Three cases: #in > #out (A), #in < #out (B), #in == #out (C)
+
+A:  X X X   B: \ | | /  C: X X X
+   / | | \      X X X      X X X
+
+Customed address matching and input/output convertion are supported. Input
+source ID tracing (for routing backward) is also available. Note that the
+output type is wrapped in BindIdIO[T].
+*/
+class MultilayerCrossbarGeneric[S <: Data, T <: Data](
+		rawInType:  S,
+		rawOutType: T,
+		nInputs:    Int,
+		nOutputs:   Int,
+		getAddr:    S => UInt,
+		getOutput:  S => T,
+		srcId:      Boolean=false,
+		inEb:       Boolean=true,
+		interInEb:  Boolean=false
+) extends Module {
+	val inputIdWidth = log2Ceil(nInputs)
+	val inType = new BindIdIO(rawInType, 0)
+	val outType = new BindIdIO(rawOutType, if (srcId) inputIdWidth else 0)
+	val io = IO(new Bundle {
+		val ins = Flipped(Vec(nInputs, DecoupledIO(rawInType)))
+		val outs = Vec(nOutputs, DecoupledIO(outType))
+	})
+
+	if (nInputs < nOutputs) {
+		val numExtendedPort = nOutputs / nInputs
+		val extendedSelWidth = log2Ceil(numExtendedPort)
+		val outSelWidth = log2Ceil(nOutputs)
+		val multiSwitch = Module(new MultilayerSwitch(
+			inType, rawInType, nInputs,
+			(in: S) => getAddr(in)(outSelWidth - 1, extendedSelWidth),
+			(out: S) => out,
+			srcId, inEb, interInEb
+		))
+		val extendedDemuxes = Array.fill(nInputs)(Module(new DemuxGeneric(
+			multiSwitch.io.outs(0).bits.cloneType, rawOutType, numExtendedPort,
+			(in: S) => getAddr(in)(extendedSelWidth - 1, 0),
+			getOutput,
+			srcId, interInEb
+		)).io)
+		multiSwitch.io.ins.zip(io.ins).foreach { case(swIn, ioIn) => {
+			swIn.bits.raw := ioIn.bits
+			swIn.bits.id  := DontCare
+			swIn.valid    := ioIn.valid
+			ioIn.ready    := swIn.ready
+		}}
+		multiSwitch.io.outs.zip(extendedDemuxes.map(_.in)).foreach { case(x, y) => x <> y }
+		for (i <- 0 until nOutputs) {
+			io.outs(i) <> extendedDemuxes(i / numExtendedPort).outs(i % numExtendedPort)
+		}
+	} else if (nInputs > nOutputs) {
+		val numExtendedPort = nInputs / nOutputs
+		val extendedMuxes = Array.fill(nOutputs)(Module(new MuxGeneric(inType, rawInType, numExtendedPort, (out: S) => out, srcId, inEb)).io)
+		val multiSwitch = Module(new MultilayerSwitch(extendedMuxes(0).out.bits.cloneType, rawOutType, nOutputs, getAddr, getOutput, srcId, interInEb, interInEb))
+
+		for (i <- 0 until nInputs) {
+			val muxId = i / numExtendedPort
+			val portId = i % numExtendedPort
+			extendedMuxes(muxId).ins(portId).bits.raw := io.ins(i).bits
+			extendedMuxes(muxId).ins(portId).bits.id  := DontCare
+			extendedMuxes(muxId).ins(portId).valid    := io.ins(i).valid
+			io.ins(i).ready                           := extendedMuxes(muxId).ins(portId).ready
+		}
+		multiSwitch.io.ins.zip(extendedMuxes.map(_.out)).foreach { case(x, y) => x <> y }
+		multiSwitch.io.outs.zip(io.outs).foreach { case(x, y) => x <> y }
+	} else {
+		val multiSwitch = Module(new MultilayerSwitch(inType, rawOutType, nInputs, getAddr, getOutput, srcId, inEb, interInEb))
+		for (i <- 0 until nInputs) {
+			multiSwitch.io.ins(i).bits.raw := io.ins(i).bits
+			multiSwitch.io.ins(i).bits.id  := DontCare
+			multiSwitch.io.ins(i).valid    := io.ins(i).valid
+			io.ins(i).ready                := multiSwitch.io.ins(i).ready
+			io.outs(i) <> multiSwitch.io.outs(i)
+		}
+	}
+}
+
+class MultilayerCrossbar(
+		nInputs:      Int=Crossbar.numberOfInputs,
+		nOutputs:     Int=Crossbar.numberOfOutputs,
+		addrWidth:    Int=Crossbar.addressWidth,
+		reqDataWidth: Int=Crossbar.reqDataWidth,
+		memDataWidth: Int=Crossbar.memDataWidth,
+		idWidth:      Int=Crossbar.idWidth,
+		numCBsPerPC:  Int=2,
+		inEb:         Boolean=true
+) extends CrossbarBase(nInputs, nOutputs, addrWidth, reqDataWidth, memDataWidth, idWidth, numCBsPerPC, inEb) {
+
+	val interInEb = false
+
+	// Request route: address & ID
+	val addrCrossbarInputType = io.ins(0).addr.bits.cloneType
+	val addrCrossbarOutputType = new AddrIdIO(outAddrWidth, idWidth) // attach the input ID after coming out of the crossbar
+	val addrCrossbar = Module(new MultilayerCrossbarGeneric(
+		addrCrossbarInputType,
+		addrCrossbarOutputType,
+		nInputs,
+		nOutputs,
+		(input: AddrIdIO) => {
+			val outAddr = Wire(UInt(moduleAddrWidth.W))
+			if (channelSelWidth > 0) {
+				if (cacheSelWidth > 0) {
+					outAddr := Cat(input.addr(channelSelWidth + hbmChannelWidth - 1, hbmChannelWidth),
+									input.addr(cacheSelWidth + offsetWidth - 1, offsetWidth))
+				} else {
+					outAddr := input.addr(channelSelWidth + hbmChannelWidth - 1, hbmChannelWidth)
+				}
+			} else {
+				if (cacheSelWidth > 0) {
+					outAddr := input.addr(cacheSelWidth + offsetWidth - 1, offsetWidth)
+				} else {
+					outAddr := DontCare
+				}
+			}
+			outAddr
+		},
+		(input: AddrIdIO) => {
+			val output = Wire(addrCrossbarOutputType)
+			if (addrWidth > moduleAddrWidth + offsetWidth) {
+				if (channelSelWidth > 0) {
+					if (addrWidth > channelSelWidth + hbmChannelWidth) {
+						output.addr := Cat(input.addr(addrWidth - 1, channelSelWidth + hbmChannelWidth),
+											input.addr(hbmChannelWidth - 1, cacheSelWidth + offsetWidth),
+											input.addr(offsetWidth - 1, 0))
+					} else {	// in this case tag1's width is zero
+						output.addr := Cat(input.addr(hbmChannelWidth - 1, cacheSelWidth + offsetWidth),
+											input.addr(offsetWidth - 1, 0))
+					}
+				} else {
+					output.addr := Cat(input.addr(addrWidth - 1, cacheSelWidth + offsetWidth),
+										input.addr(offsetWidth - 1, 0))
+				}
+			} else {
+				output.addr := input.addr(offsetWidth - 1, 0)
+			}
+			output.id := input.id
+			output
+		},
+		srcId=true,
+		inEb,
+		interInEb
+	)).io
+
+	addrCrossbar.ins.zip(io.ins.map(_.addr)).foreach { case(x, y) => x <> y }
+	addrCrossbar.outs.zip(io.outs.map(_.addr)).foreach {
+		case(x, y) => {
+			y.bits.addr := x.bits.raw.addr
+			y.bits.id   := Cat(x.bits.id, x.bits.raw.id) // binding input port ID and AXI ID
+			y.valid     := x.valid
+			x.ready     := y.ready
+		}
+	}
+
+	// Response route: data & ID
+	val dataCrossbarInputType = io.outs(0).data.bits.cloneType
+	val dataCrossbarOutputType = io.ins(0).data.bits.cloneType
+	val dataCrossbar = Module(new MultilayerCrossbarGeneric(
+		dataCrossbarInputType,
+		dataCrossbarOutputType,
+		nOutputs,
+		nInputs,
+		(input: DataIdIO) => input.id(outIdWidth - 1, idWidth), // extract the input source ID
+		(input: DataIdIO) => {
+			val output = Wire(dataCrossbarOutputType)
+			output.data := input.data
+			output.id   := input.id(idWidth - 1, 0) // extrace the AXI ID
+			output
+		},
+		srcId=false,
+		inEb,
+		interInEb
+	)).io
+
+	dataCrossbar.ins.zip(io.outs.map(_.data)).foreach { case(x, y) => x <> y }
+	dataCrossbar.outs.zip(io.ins.map(_.data)).foreach {
+		case(x, y) => {
+			y.bits.data := x.bits.raw.data
+			y.bits.id   := x.bits.raw.id
+			y.valid     := x.valid
+			x.ready     := y.ready
+		}
+	}
+}
+
+// Down below is testbench
+class RouteEngine(addrWidth: Int, idWidth: Int) extends Module {
+	val io = IO(new Bundle{
+		val in = Input(UInt(idWidth.W))
+		val out = DecoupledIO(new AddrIdIO(addrWidth, idWidth))
+	})
+
+	io.out.valid     := true.B
+	io.out.bits.id   := io.in
+	if (addrWidth > 0) {
+		val lfsr = LFSR16(io.out.fire())
+		io.out.bits.addr := lfsr(addrWidth - 1, 0)
+	} else {
+		io.out.bits.addr := DontCare
+	}
+}
+
+class MultilayerCrossbarTestbench extends Module {
+	val numInputs = 1
+	val numOutputs = 8
+	val inSelWidth = log2Ceil(numInputs)
+	val outSelWidth = log2Ceil(numOutputs)
+	val ioType = new AddrIdIO(outSelWidth, inSelWidth)
+	val io = IO(new Bundle{
+		val outs = Vec(numOutputs, ValidIO(new BindIdIO(ioType, numInputs)))
+	})
+
+	val res = Array.fill(numInputs)(Module(new RouteEngine(outSelWidth, inSelWidth)))
+	val crossbar = Module(new MultilayerCrossbarGeneric(
+		ioType,
+		ioType,
+		numInputs,
+		numOutputs,
+		(in: AddrIdIO) => in.addr,
+		(in: AddrIdIO) => in,
+		srcId=true,
+		inEb=true,
+		interInEb=false
+	))
+
+	(0 until numInputs).map((i) => res(i).io.in := i.U)
+	res.zip(crossbar.io.ins).foreach {
+		case(x, y) => x.io.out <> y
+	}
+	(0 until numOutputs).map((i) => crossbar.io.outs(i).ready := LFSR16()(i % 16))
+	io.outs.zip(crossbar.io.outs).foreach {
+		case(x, y) => {
+			x.bits.raw.addr := y.bits.raw.addr
+			x.bits.raw.id   := y.bits.raw.id
+			x.bits.id       := y.bits.id
+			// x.bits.id       := DontCare
+			x.valid         := y.valid
+		}
+	}
+}
+
+object MultilayerCrossbarTestbenchGen extends App {
+	chisel3.Driver.execute(
+		args,
+		() => new MultilayerCrossbarTestbench()
+	)
 }

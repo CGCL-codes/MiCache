@@ -40,6 +40,7 @@ class SubentryBuffer(idWidth: Int=SubentryBuffer.idWidth, memDataWidth: Int=Sube
         val in = Flipped(DecoupledIO(new MSHRToLdBufIO(offsetWidth, idWidth, dataWidth=memDataWidth, rowAddrWidth=rowAddrWidth)))
         val frqOut = DecoupledIO(UInt(rowAddrWidth.W))
         val stopAlloc = Output(Bool())
+        val maxAllowedSubentries = Input(UInt((rowAddrWidth + 1).W))
         val respGenOut = DecoupledIO(new RespGenIO(memDataWidth, offsetWidth, idWidth, numEntriesPerRow))
         val axiProfiling = new AXI4LiteReadOnlyProfiling(Profiling.dataWidth, Profiling.regAddrWidth)
     })
@@ -66,6 +67,7 @@ class SubentryBuffer(idWidth: Int=SubentryBuffer.idWidth, memDataWidth: Int=Sube
     /* nextRowPtr of the row just read from memory */
     val nextRowPtr = Wire(UInt(rowAddrWidth.W))
 
+    // 输入端口仲裁，当前请求（链表操作）> 新请求
     /* Arbitrates between incoming requests and next row of the current delayedRequest */
     val inputArbiter = Module(new Arbiter(new MSHRToLdBufWithOrigAddrIO(offsetWidth, idWidth, memDataWidth, rowAddrWidth), 2))
     inputArbiter.io.in(1).valid := inputQueue.io.deq.valid
@@ -76,6 +78,7 @@ class SubentryBuffer(idWidth: Int=SubentryBuffer.idWidth, memDataWidth: Int=Sube
     inputArbiter.io.in(1).bits.data    := inputQueue.io.deq.bits.data
     inputArbiter.io.in(1).bits.opType  := inputQueue.io.deq.bits.opType
 
+    // 查询流水线
     inputArbiter.io.out.ready := sharedPipelineReady
     val delayedRequest = Wire(Vec(SubentryBuffer.bramLatency + 1, ValidIO(inputArbiter.io.out.bits.cloneType)))
     delayedRequest(0).valid := RegEnable(inputArbiter.io.out.valid, enable=sharedPipelineReady, init=false.B)
@@ -107,6 +110,7 @@ class SubentryBuffer(idWidth: Int=SubentryBuffer.idWidth, memDataWidth: Int=Sube
       delayedRequest(i).bits := RegEnable(delayedRequest(i-1).bits, enable=sharedPipelineReady)
     }
 
+    // 未完成请求输入
     inputArbiter.io.in(0).valid := delayedRequest.last.valid & nextRowPtrValid
     inputArbiter.io.in(0).bits.rowAddr := nextRowPtr
     inputArbiter.io.in(0).bits.origRowAddr := delayedRequest.last.bits.origRowAddr
@@ -150,8 +154,10 @@ class SubentryBuffer(idWidth: Int=SubentryBuffer.idWidth, memDataWidth: Int=Sube
     invalidLdBufWritePipelineIO.bits.rowFull := false.B
     val forwardPipeline = RegInit(Vec(Seq.fill(SubentryBuffer.pipelineLength)(invalidLdBufWritePipelineIO)))
 
+    // 空闲子项行队列
     /* FRQ and its connections + stopAlloc */
-    val frq = Module(new FreeRowQueue(rowAddrWidth, mshrPipelineLength + inputQueuesDepth + SubentryBuffer.bramLatency + 1)) /* The last 1 is for the additional register just after inputArbiter */
+    val frqAlmostEmptyMargin = mshrPipelineLength + inputQueuesDepth + SubentryBuffer.bramLatency + 1
+    val frq = Module(new FreeRowQueue(rowAddrWidth, frqAlmostEmptyMargin)) /* The last 1 is for the additional register just after inputArbiter */
     /* The FRQ must be arbitrated between two consumers: io.frqOut (with highest priority)
      * and the write pipeline. If the FRQ becomes empty and we try to request an entry,
      * stopAlloc must be set to true. */
@@ -183,7 +189,8 @@ class SubentryBuffer(idWidth: Int=SubentryBuffer.idWidth, memDataWidth: Int=Sube
       }
       io.stopAlloc := frq.io.almostEmpty | memNotEmpty
     } else {
-      io.stopAlloc := frq.io.almostEmpty
+      // io.stopAlloc := frq.io.almostEmpty
+      io.stopAlloc := frq.io.count <= ((frqAlmostEmptyMargin + memDepth).U - io.maxAllowedSubentries)
     }
 
 
@@ -429,6 +436,7 @@ class FreeRowQueue(rowAddrWidth: Int=SubentryBuffer.rowAddrWidth, almostEmptyMar
     }
     bw.close()
 
+    // 使用BRAM队列存储空闲子项行的地址，达到类似malloc/free函数的效果
     val bramQueue = Module(new BRAMQueue(rowAddrWidth, memDepth, memDepth, almostEmptyMargin, initFilePath))
     io.enq <> bramQueue.io.enq
     io.deq <> bramQueue.io.deq

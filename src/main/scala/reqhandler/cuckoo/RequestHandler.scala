@@ -57,15 +57,15 @@ object RequestHandler {
     val responseGeneratorPorts = 1 /* More ports are supported by the responseGenerator but not by the RequestHandler */
 }
 
-class RequestHandlerBase(reqAddrWidth: Int=RequestHandler.reqAddrWidth, reqDataWidth: Int=RequestHandler.reqDataWidth, reqIdWidth: Int=RequestHandler.reqIdWidth, memDataWidth: Int=RequestHandler.memDataWidth, cacheSizeReductionWidth: Int=RequestHandler.cacheSizeReductionWidth, numMSHRWidth: Int=0) extends Module {
+class RequestHandlerBase(reqAddrWidth: Int=RequestHandler.reqAddrWidth, reqDataWidth: Int=RequestHandler.reqDataWidth, reqIdWidth: Int=RequestHandler.reqIdWidth, memDataWidth: Int=RequestHandler.memDataWidth, cacheSizeReductionWidth: Int=RequestHandler.cacheSizeReductionWidth, numMSHRWidth: Int=0, subentriesAddrWidth: Int=0) extends Module {
     require(isPow2(memDataWidth / reqDataWidth))
     require(RequestHandler.responseGeneratorPorts == 1)
     val offsetWidth = log2Ceil(memDataWidth / reqDataWidth)
     val tagWidth = reqAddrWidth - offsetWidth
-    val io = IO(new RequestHandlerIO(reqAddrWidth, tagWidth, reqDataWidth, reqIdWidth, memDataWidth, cacheSizeReductionWidth, numMSHRWidth))
+    val io = IO(new RequestHandlerIO(reqAddrWidth, tagWidth, reqDataWidth, reqIdWidth, memDataWidth, cacheSizeReductionWidth, numMSHRWidth, subentriesAddrWidth))
 }
 
-class RequestHandlerCuckoo(reqAddrWidth: Int=RequestHandler.reqAddrWidth, reqDataWidth: Int=RequestHandler.reqDataWidth, reqIdWidth: Int=RequestHandler.reqIdWidth, memDataWidth: Int=RequestHandler.memDataWidth, numHashTables: Int=RequestHandler.numHashTables, numMSHRPerHashTable: Int=RequestHandler.numMSHRPerHashTable, mshrAssocMemorySize: Int=RequestHandler.mshrAssocMemorySize, numSubentriesPerRow: Int=RequestHandler.numSubentriesPerRow, subentriesAddrWidth: Int=RequestHandler.subentriesAddrWidth, numCacheWays: Int=RequestHandler.numCacheWays, cacheSizeBytes: Int=RequestHandler.cacheSizeBytes, cacheSizeReductionWidth: Int=RequestHandler.cacheSizeReductionWidth, numMSHRWidth: Int=RequestHandler.numMSHRWidth, nextPtrCacheSize: Int=RequestHandler.nextPtrCacheSize, blockOnNextPtr: Boolean=false, sameHashFunction: Boolean=false) extends RequestHandlerBase(reqAddrWidth, reqDataWidth, reqIdWidth, memDataWidth, cacheSizeReductionWidth, numMSHRWidth) {
+class RequestHandlerCuckoo(reqAddrWidth: Int=RequestHandler.reqAddrWidth, reqDataWidth: Int=RequestHandler.reqDataWidth, reqIdWidth: Int=RequestHandler.reqIdWidth, memDataWidth: Int=RequestHandler.memDataWidth, numHashTables: Int=RequestHandler.numHashTables, numMSHRPerHashTable: Int=RequestHandler.numMSHRPerHashTable, mshrAssocMemorySize: Int=RequestHandler.mshrAssocMemorySize, numSubentriesPerRow: Int=RequestHandler.numSubentriesPerRow, subentriesAddrWidth: Int=RequestHandler.subentriesAddrWidth, numCacheWays: Int=RequestHandler.numCacheWays, cacheSizeBytes: Int=RequestHandler.cacheSizeBytes, cacheSizeReductionWidth: Int=RequestHandler.cacheSizeReductionWidth, numMSHRWidth: Int=RequestHandler.numMSHRWidth, nextPtrCacheSize: Int=RequestHandler.nextPtrCacheSize, blockOnNextPtr: Boolean=false, sameHashFunction: Boolean=false) extends RequestHandlerBase(reqAddrWidth, reqDataWidth, reqIdWidth, memDataWidth, cacheSizeReductionWidth, numMSHRWidth, subentriesAddrWidth) {
   /* Cache */
   val cache: Cache =
       if(numCacheWays > 0 && cacheSizeBytes > 0) {
@@ -111,6 +111,7 @@ class RequestHandlerCuckoo(reqAddrWidth: Int=RequestHandler.reqAddrWidth, reqDat
   subentryBuffer.io.in <> mshrManager.io.outLdBuf
   subentryBuffer.io.frqOut <> mshrManager.io.frqIn
   mshrManager.io.stopAllocFromLdBuf := subentryBuffer.io.stopAlloc
+  subentryBuffer.io.maxAllowedSubentries := io.maxAllowedSubentries
 
   /* ResponseGenerator */
   // val responseGenerator = Module(new ResponseGenerator(reqIdWidth, memDataWidth, reqDataWidth, numSubentriesPerRow, RequestHandler.responseGeneratorPorts))

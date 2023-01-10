@@ -67,12 +67,14 @@ class RRCache(addrWidth: Int=Cache.addrWidth, idWidth: Int=Cache.idWidth, reqDat
     def getTag(input: UInt, tagWidth: Int=tagWidth, addrWidth: Int=addrWidth): UInt = input(addrWidth - 1, addrWidth - tagWidth)
     def getOffset(input: UInt, offsetWidth: Int=offsetWidth): UInt = input(offsetWidth - 1, 0)
 
+    // BRAM声明，valid位和data分别存储
     // BRAMs are initialized with zeros by default
     val dataMemories = Array.fill(numWays)(Module(new XilinxSimpleDualPortNoChangeBRAM(width=memWidth, depth=numSets)).io)
     // val validMemories = Array.fill(numWays)(Module(new XilinxDoublePumped2W2RSDPBRAM(width=1, depth=numSets, initFile=initFilePath)).io)
     val validMemories = Array.fill(numWays)(Module(new XilinxTrueDualPortReadFirstBRAM(width=1, depth=numSets)).io)
     val invalidating = Wire(Bool()) /* Enabled while the cache is being invalidated */
 
+    // 输入流水线（3级），BRAM读取延迟设置为2周期
     /* inReq delay network */
     val inReqPipelineReady = Wire(Bool())
     val delayedRequestThreeCycles = Wire(ValidIO(io.inReq.bits.cloneType))
@@ -83,6 +85,7 @@ class RRCache(addrWidth: Int=Cache.addrWidth, idWidth: Int=Cache.idWidth, reqDat
     delayedRequestThreeCycles.valid := RegEnable(delayedRequestTwoCycles.valid, init=false.B, enable=inReqPipelineReady)
     io.inReq.ready := inReqPipelineReady & ~invalidating
 
+    // 读取的多路cacah line数据和有效位
     val cacheLines = Wire(Vec(numWays, cacheLineType))
     val valids = Wire(Vec(numWays, Bool()))
     /* b channel of memories: serve requests (read-only) */
@@ -103,6 +106,7 @@ class RRCache(addrWidth: Int=Cache.addrWidth, idWidth: Int=Cache.idWidth, reqDat
         validMemories(i).enb := inReqPipelineReady
         valids(i) := validMemories(i).doutb === 1.U
     }
+    // 命中判断逻辑
     val hits = (0 until numWays).map(
       i => valids(i) & MuxLookup(
         io.log2SizeReduction,
@@ -118,6 +122,7 @@ class RRCache(addrWidth: Int=Cache.addrWidth, idWidth: Int=Cache.idWidth, reqDat
     val delayedOffset = getOffset(delayedRequestThreeCycles.bits.addr)
     val selectedData = MuxLookup(delayedOffset, selectedLine.data(reqDataWidth-1, 0), (0 until memDataWidth by reqDataWidth).map(i => (i/reqDataWidth).U -> selectedLine.data(i+reqDataWidth-1, i)))
 
+    // 命中数据出口，在流水线第三级处理
     /* outData EB and connections to output */
     val outDataEb = Module(new ElasticBuffer(io.outData.bits.cloneType))
     outDataEb.io.out <> io.outData
@@ -125,6 +130,7 @@ class RRCache(addrWidth: Int=Cache.addrWidth, idWidth: Int=Cache.idWidth, reqDat
     outDataEb.io.in.bits.id := delayedRequestThreeCycles.bits.id
     outDataEb.io.in.bits.data := selectedData
 
+    // 未命中信息出口
     /* outMisses EB and connections to output */
     val outMissesEb = Module(new ElasticBuffer(io.outMisses.bits.cloneType))
     outMissesEb.io.out <> io.outMisses
@@ -134,6 +140,7 @@ class RRCache(addrWidth: Int=Cache.addrWidth, idWidth: Int=Cache.idWidth, reqDat
     /* inReqPipelineReady */
     inReqPipelineReady := MuxCase(true.B, Array(outDataEb.io.in.valid -> outDataEb.io.in.ready, outMissesEb.io.in.valid -> outMissesEb.io.in.ready))
 
+    // cache更新逻辑
     /* inData (cache update) delay network */
     /* First, we read all the sets to figure out which ones are free. Then, we select one that is free. If they are all full, choose (pseudo)randomly. */
     val delayedData = Wire(ValidIO(io.inData.bits.cloneType))
@@ -166,6 +173,7 @@ class RRCache(addrWidth: Int=Cache.addrWidth, idWidth: Int=Cache.idWidth, reqDat
         dataMemories(i).wea := validMemories(i).wea
         availableWaySelectionArbiter.io.in(i).valid := validMemories(i).douta === 0.U
     }
+    // 随机选择存储槽位
     val lfsr = LFSR16(delayedData.valid)
     if (numWays > 1)
         wayToUpdateSelect := UIntToOH(Mux(availableWaySelectionArbiter.io.out.valid, availableWaySelectionArbiter.io.chosen, lfsr(log2Ceil(numWays)-1, 0))).toBools

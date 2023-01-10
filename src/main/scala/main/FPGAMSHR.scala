@@ -4,7 +4,7 @@ import chisel3._
 import chisel3.util._
 import fpgamshr.util.{DReg, ElasticBuffer, BaseReorderBufferAXI, ReorderBufferAXI, DummyReorderBufferAXI, ReorderBufferIO}
 import fpgamshr.interfaces._
-import fpgamshr.crossbar.{Crossbar}
+import fpgamshr.crossbar.{Crossbar, MultilayerCrossbar}
 import fpgamshr.reqhandler.cuckoo.{RequestHandlerCuckoo, RequestHandlerBase}
 import fpgamshr.reqhandler.traditional.{RequestHandlerBlockingCache, RequestHandlerTraditionalMSHR}
 import fpgamshr.extmemarbiter.{InOrderHybridArbiter, ExternalMemoryArbiterBase}
@@ -96,7 +96,7 @@ numMemoryPorts=${numMemoryPorts}
 	def ipName(): String = s"""FPGAMSHR_ra${FPGAMSHR.reqAddrWidth}
 _id${FPGAMSHR.reqIdWidth}
 _in${FPGAMSHR.numInputs}
-_bk${FPGAMSHR.numReqHandlers}
+_mlx_bk${FPGAMSHR.numReqHandlers}
 _ht${FPGAMSHR.numHashTables}
 _mshr${FPGAMSHR.numMSHRPerHashTable}
 _st${if(FPGAMSHR.numHashTables > 0) FPGAMSHR.mshrAssocMemorySize else 0}
@@ -200,6 +200,7 @@ class FPGAMSHR extends Module {
 	val log2CacheSizeReduction = RegInit(0.U)
 	val numMSHRTotal = FPGAMSHR.numHashTables * FPGAMSHR.numMSHRPerHashTable
 	val maxAllowedMSHRs = RegInit((numMSHRTotal * (1 - FPGAMSHR.mshrAlmostFullRelMargin)).toInt.U)
+	val maxAllowedSubentries = RegInit((1 << FPGAMSHR.subentryAddrWidth).U)
 	when (dataAddrAvailable & (inputProfilingWriteAddrEb.io.out.bits === 0.U) & inputProfilingWriteStrbEb.io.out.bits.asUInt.andR) {
 		when (inputProfilingWriteDataEb.io.out.bits(3) === 1.U) {
 			enableCache := true.B
@@ -217,6 +218,9 @@ class FPGAMSHR extends Module {
 	if (numMSHRTotal > 0) {
 		when (dataAddrAvailable & (inputProfilingWriteAddrEb.io.out.bits === 2.U) & inputProfilingWriteStrbEb.io.out.bits.asUInt.andR) {
 			maxAllowedMSHRs := inputProfilingWriteDataEb.io.out.bits(log2Ceil(numMSHRTotal)-1, 0)
+		}
+		when (dataAddrAvailable & (inputProfilingWriteAddrEb.io.out.bits === 3.U) & inputProfilingWriteStrbEb.io.out.bits.asUInt.andR) {
+			maxAllowedSubentries := inputProfilingWriteDataEb.io.out.bits(FPGAMSHR.subentryAddrWidth, 0)
 		}
 	}
 
@@ -244,7 +248,8 @@ class FPGAMSHR extends Module {
 	|<-inputIdWidth->|<-reqIdWidth->|
 	*/
 
-	val crossbar = Module(new Crossbar(
+	// val crossbar = Module(new Crossbar(
+	val crossbar = Module(new MultilayerCrossbar(
 		nInputs      = FPGAMSHR.numInputs,
 		nOutputs     = FPGAMSHR.numReqHandlers,
 		addrWidth    = FPGAMSHR.reqAddrWidth - subWordOffsetWidth,
@@ -359,6 +364,7 @@ class FPGAMSHR extends Module {
 		reqHandlers(i).invalidate             := invalidate
 		reqHandlers(i).log2CacheSizeReduction := log2CacheSizeReduction
 		reqHandlers(i).maxAllowedMSHRs        := maxAllowedMSHRs
+		reqHandlers(i).maxAllowedSubentries   := maxAllowedSubentries
 		reqHandlers(i).enableCache            := enableCache
 		// reqHandlers(i).clock2x := io.clock2x
 

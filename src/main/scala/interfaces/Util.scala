@@ -65,3 +65,8 @@ class DecAddrIdDecDataIdIO(addrWidth: Int, dataWidth: Int, idWidth: Int) extends
 class Clock2xBundle extends Bundle {
   val clock2x = Input(Clock())
 }
+
+class BindIdIO[T <: Data](gen: T, val idWidth: Int) extends Bundle with HasID {
+  val raw = gen.cloneType
+  override def cloneType = (new BindIdIO(gen, idWidth)).asInstanceOf[this.type]
+}

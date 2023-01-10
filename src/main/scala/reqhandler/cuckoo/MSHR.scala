@@ -98,6 +98,7 @@ class CuckooMSHR(addrWidth: Int=MSHR.addrWidth, numMSHRPerHashTable: Int=MSHR.nu
 
   val pipelineReady = Wire(Bool())
 
+  // 输入端口有两类输入，即分配与释放，释放的优先级更高
   /* Input logic */
   val inputArbiter = Module(new Arbiter(new AddrDataIdIO(addrWidth, memDataWidth, idWidth), 2))
   val stopAllocs = Wire(Bool())
@@ -117,6 +118,7 @@ class CuckooMSHR(addrWidth: Int=MSHR.addrWidth, numMSHRPerHashTable: Int=MSHR.nu
   inputArbiter.io.in(1).bits.id    := io.allocIn.bits.id
   io.allocIn.ready   := inputArbiter.io.in(1).ready & ~stopAllocs
 
+  // 第二层仲裁器，优先级低的输入源即stash的输出，实现了闲时插回的效果
   /* Arbiter between input and stash. Input has higher priority: we try to put back
    * entries in the tables "in the background". */
   val stashArbiter = Module(new Arbiter(new AddrDataIdAllocLdBufPtrLastTableIO(addrWidth, memDataWidth, idWidth, ldBufRowAddrWidth, log2Ceil(numHashTables)), 2))
@@ -142,6 +144,7 @@ class CuckooMSHR(addrWidth: Int=MSHR.addrWidth, numMSHRPerHashTable: Int=MSHR.nu
   stash.io.deq.ready := stashArbiter.io.in(1).ready
   stashArbiter.io.out.ready := pipelineReady
 
+  // 4级流水线：哈希计算，地址读取，等待2周期得到结果
   /* Pipeline */
   /* stashArbiter.io.out -> register -> hash computation -> memory read address and register -> register -> data coming back from memory */
   val delayedRequest = Wire(Vec(MSHR.pipelineLatency, ValidIO(stashArbiter.io.out.bits.cloneType)))
@@ -165,6 +168,7 @@ class CuckooMSHR(addrWidth: Int=MSHR.addrWidth, numMSHRPerHashTable: Int=MSHR.nu
     delayedIsFromStash(i) := RegEnable(delayedIsFromStash(i-1), enable=pipelineReady)
   }
 
+  // 根据cache line的tag进行哈希计算，得到MSHR阵列中的地址
   /* Address hashing */
   val r = new scala.util.Random(42)
   val a = (0 until numHashTables).map(_ => r.nextInt(1 << hashMultConstWidth))
@@ -175,6 +179,7 @@ class CuckooMSHR(addrWidth: Int=MSHR.addrWidth, numMSHRPerHashTable: Int=MSHR.nu
   /* Uncomment to print out hashing parameters a and b */
   a.indices.foreach(i => println(s"a($i)=${a(i)} b($i)=${b(i)}"))
 
+  // MSHR读取逻辑
   /* Memories instantiation and interconnection */
   /* Memories are initialized with all zeros, which is fine for us since all the valids will be false */
   val memories = Array.fill(numHashTables)(Module(new XilinxSimpleDualPortNoChangeBRAM(width=memWidth, depth=numMSHRPerHashTable)).io)
@@ -190,6 +195,7 @@ class CuckooMSHR(addrWidth: Int=MSHR.addrWidth, numMSHRPerHashTable: Int=MSHR.nu
     storeToLoads(i).pipelineReady := pipelineReady
     storeToLoads(i).dataInFromMem := memType.fromBits(memories(i).doutb)
   }
+  // 查找匹配项，包括读取出的BRAM中的项、流水线中的项、stash中的项
   val dataRead = storeToLoads.map(x => x.dataInFixed)
   /* Matching and stash deallocation logic */
   val hashTableMatches = dataRead.map(x => x.valid & x.tag === getTag(delayedRequest.last.bits.addr))
@@ -212,6 +218,7 @@ class CuckooMSHR(addrWidth: Int=MSHR.addrWidth, numMSHRPerHashTable: Int=MSHR.nu
    * To better spread the entries among HTs, we want all HTs to have the same priority; however, we can only choose
    * a hash table for which the entry corresponding to the new tag is free. We use a RRArbiter to implement this functionality, where we
    * do not care about the value to arbitrate and we use ~entry.valid as valid signal for the arbiter. */
+  // 轮巡地选择哈希表进行存储（当一个键值在所有表中对应的位置未满时，据此选择存储位置）
   val fakeRRArbiterForSelect = Module(new ResettableRRArbiter(Bool(), numHashTables))
   for(i <- 0 until numHashTables) fakeRRArbiterForSelect.io.in(i).valid := ~dataRead(i).valid
   val hashTableToUpdate = UIntToOH(fakeRRArbiterForSelect.io.chosen).toBools
@@ -221,6 +228,7 @@ class CuckooMSHR(addrWidth: Int=MSHR.addrWidth, numMSHRPerHashTable: Int=MSHR.nu
    * We use a round-robin policy also for the first eviction: the index of the last hash
    * table from which we evicted is stored in evictTableForFirstAttempt.
    * This round-robin policy is simpler and works better than using an LFSR16. */
+  // 使用计数器来索引淘汰位，但若被插入项来自stash，则插入其所在的原表的下一个表中
   val evictCounterEnable = Wire(Bool())
   val evictTableForFirstAttempt = Counter(evictCounterEnable, numHashTables)
   /* To support non-power-of-two number of tables, we need to implement the wrapping logic manually. */
