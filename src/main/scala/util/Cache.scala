@@ -95,7 +95,8 @@ class RRCache(addrWidth: Int=Cache.addrWidth, idWidth: Int=Cache.idWidth, reqDat
         dataMemories(i).addrb := getSet(io.inReq.bits.addr, io.log2SizeReduction)
         dataMemories(i).enb := inReqPipelineReady
         dataMemories(i).regceb := inReqPipelineReady
-        cacheLines(i) := cacheLineType.fromBits(dataMemories(i).doutb)
+        // cacheLines(i) := cacheLineType.fromBits(dataMemories(i).doutb)
+        cacheLines(i) := dataMemories(i).doutb.asTypeOf(cacheLineType)
 
         //validMemories(i).clock2x := io.clock2x
         //validMemories(i).rdaddrb := getSet(io.inReq.bits.addr, io.log2SizeReduction)

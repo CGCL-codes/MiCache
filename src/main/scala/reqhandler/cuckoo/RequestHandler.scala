@@ -67,40 +67,46 @@ class RequestHandlerBase(reqAddrWidth: Int=RequestHandler.reqAddrWidth, reqDataW
 
 class RequestHandlerCuckoo(reqAddrWidth: Int=RequestHandler.reqAddrWidth, reqDataWidth: Int=RequestHandler.reqDataWidth, reqIdWidth: Int=RequestHandler.reqIdWidth, memDataWidth: Int=RequestHandler.memDataWidth, numHashTables: Int=RequestHandler.numHashTables, numMSHRPerHashTable: Int=RequestHandler.numMSHRPerHashTable, mshrAssocMemorySize: Int=RequestHandler.mshrAssocMemorySize, numSubentriesPerRow: Int=RequestHandler.numSubentriesPerRow, subentriesAddrWidth: Int=RequestHandler.subentriesAddrWidth, numCacheWays: Int=RequestHandler.numCacheWays, cacheSizeBytes: Int=RequestHandler.cacheSizeBytes, cacheSizeReductionWidth: Int=RequestHandler.cacheSizeReductionWidth, numMSHRWidth: Int=RequestHandler.numMSHRWidth, nextPtrCacheSize: Int=RequestHandler.nextPtrCacheSize, blockOnNextPtr: Boolean=false, sameHashFunction: Boolean=false) extends RequestHandlerBase(reqAddrWidth, reqDataWidth, reqIdWidth, memDataWidth, cacheSizeReductionWidth, numMSHRWidth, subentriesAddrWidth) {
   /* Cache */
-  val cache: Cache =
-      if(numCacheWays > 0 && cacheSizeBytes > 0) {
-          Module(new RRCache(reqAddrWidth, reqIdWidth, reqDataWidth, memDataWidth, numCacheWays, cacheSizeBytes, cacheSizeReductionWidth))
-      } else {
-          Module(new DummyCache(reqAddrWidth, reqIdWidth, reqDataWidth, memDataWidth, cacheSizeReductionWidth))
-      }
+//   val cache: Cache =
+//       if(numCacheWays > 0 && cacheSizeBytes > 0) {
+//           Module(new RRCache(reqAddrWidth, reqIdWidth, reqDataWidth, memDataWidth, numCacheWays, cacheSizeBytes, cacheSizeReductionWidth))
+//       } else {
+//           Module(new DummyCache(reqAddrWidth, reqIdWidth, reqDataWidth, memDataWidth, cacheSizeReductionWidth))
+//       }
 
-  cache.io.inReq <> io.inReq.addr
-  cache.io.log2SizeReduction := io.log2CacheSizeReduction
-  cache.io.invalidate := io.invalidate
-  cache.io.enabled := io.enableCache
+  // cache.io.inReq <> io.inReq.addr
+  // cache.io.log2SizeReduction := io.log2CacheSizeReduction
+  // cache.io.invalidate := io.invalidate
+  // cache.io.enabled := io.enableCache
 
   val totalNumMSHR = numHashTables * numMSHRPerHashTable
   // mshrAlmostFullMargin can now be redefined at runtime via axiProfiling interface
   // val mshrAlmostFullMargin = (totalNumMSHR * RequestHandler.mshrAlmostFullRelMargin).toInt
-  val mshrManager = Module(new CuckooMSHR(reqAddrWidth, numMSHRPerHashTable, numHashTables,reqIdWidth, memDataWidth, reqDataWidth, subentriesAddrWidth, 0, mshrAssocMemorySize, sameHashFunction))
+  // val mshrManager = Module(new CuckooMSHR(reqAddrWidth, numMSHRPerHashTable, numHashTables,reqIdWidth, memDataWidth, reqDataWidth, subentriesAddrWidth, 0, mshrAssocMemorySize, sameHashFunction))
+  val mshrManager = Module(new UniStorage(reqAddrWidth, numMSHRPerHashTable, numHashTables,reqIdWidth, memDataWidth, reqDataWidth, subentriesAddrWidth, 0, mshrAssocMemorySize, sameHashFunction))
 
-  mshrManager.io.allocIn <> cache.io.outMisses
-  mshrManager.io.allocIn.bits.addr := Cat(cache.io.outMisses.bits.addr(reqAddrWidth-1, offsetWidth), cache.io.outMisses.bits.addr(offsetWidth-1, 0))
-  mshrManager.io.allocIn.bits.id := cache.io.outMisses.bits.id
-  mshrManager.io.allocIn.valid := cache.io.outMisses.valid
-  cache.io.outMisses.ready := mshrManager.io.allocIn.ready
-  val inMemRespEagerFork = Module(new EagerFork(new AddrDataIO(reqAddrWidth, memDataWidth), 2))
+  // mshrManager.io.allocIn <> cache.io.outMisses
+  // mshrManager.io.allocIn.bits.addr := Cat(cache.io.outMisses.bits.addr(reqAddrWidth-1, offsetWidth), cache.io.outMisses.bits.addr(offsetWidth-1, 0))
+  // mshrManager.io.allocIn.bits.id := cache.io.outMisses.bits.id
+  // mshrManager.io.allocIn.valid := cache.io.outMisses.valid
+  // cache.io.outMisses.ready := mshrManager.io.allocIn.ready
+   mshrManager.io.allocIn <> io.inReq.addr
+  // val inMemRespEagerFork = Module(new EagerFork(new AddrDataIO(reqAddrWidth, memDataWidth), 2))
   val inMemRespEb = ElasticBuffer(io.inMemResp)
 
-  inMemRespEagerFork.io.in.bits.data := inMemRespEb.bits.data
-  inMemRespEagerFork.io.in.bits.addr := Cat(inMemRespEb.bits.addr, 0.U(offsetWidth.W))
-  inMemRespEagerFork.io.in.valid := inMemRespEb.valid
-  inMemRespEb.ready := inMemRespEagerFork.io.in.ready
-  mshrManager.io.deallocIn <> inMemRespEagerFork.io.out(0)
-  cache.io.inData.bits.addr := Cat(inMemRespEagerFork.io.out(1).bits.addr(reqAddrWidth-1, offsetWidth), inMemRespEagerFork.io.out(1).bits.addr(offsetWidth-1, 0))
-  cache.io.inData.bits.data := inMemRespEagerFork.io.out(1).bits.data
-  cache.io.inData.valid := inMemRespEagerFork.io.out(1).valid
-  inMemRespEagerFork.io.out(1).ready := cache.io.inData.ready
+  // inMemRespEagerFork.io.in.bits.data := inMemRespEb.bits.data
+  // inMemRespEagerFork.io.in.bits.addr := Cat(inMemRespEb.bits.addr, 0.U(offsetWidth.W))
+  // inMemRespEagerFork.io.in.valid := inMemRespEb.valid
+  // inMemRespEb.ready := inMemRespEagerFork.io.in.ready
+  // mshrManager.io.deallocIn <> inMemRespEagerFork.io.out(0)
+  // cache.io.inData.bits.addr := Cat(inMemRespEagerFork.io.out(1).bits.addr(reqAddrWidth-1, offsetWidth), inMemRespEagerFork.io.out(1).bits.addr(offsetWidth-1, 0))
+  // cache.io.inData.bits.data := inMemRespEagerFork.io.out(1).bits.data
+  // cache.io.inData.valid := inMemRespEagerFork.io.out(1).valid
+  // inMemRespEagerFork.io.out(1).ready := cache.io.inData.ready
+  mshrManager.io.deallocIn.valid     := inMemRespEb.valid
+  mshrManager.io.deallocIn.bits.data := inMemRespEb.bits.data
+  mshrManager.io.deallocIn.bits.addr := Cat(inMemRespEb.bits.addr, 0.U(offsetWidth.W))
+  inMemRespEb.ready := mshrManager.io.deallocIn.ready
 
   // mshrManager.io.outMem <> io.outMemReq
   mshrManager.io.outMem <> io.outMemReq
@@ -120,13 +126,15 @@ class RequestHandlerCuckoo(reqAddrWidth: Int=RequestHandler.reqAddrWidth, reqDat
 
   /* Returned data */
   val returnedDataArbiter = Module(new ResettableRRArbiter(new DataIdIO(reqDataWidth, reqIdWidth), 2))
-  returnedDataArbiter.io.in(0) <> cache.io.outData
+  // returnedDataArbiter.io.in(0) <> cache.io.outData
+  returnedDataArbiter.io.in(0) <> mshrManager.io.respOut
   returnedDataArbiter.io.in(1) <> responseGenerator.io.out
   returnedDataArbiter.io.out <> io.inReq.data
 
   /* Profiling */
   if (Profiling.enable) {
-      val subModulesProfilingInterfaces = Array(cache.io.axiProfiling, mshrManager.io.axiProfiling, subentryBuffer.io.axiProfiling, responseGenerator.io.axiProfiling)
+      // val subModulesProfilingInterfaces = Array(cache.io.axiProfiling, mshrManager.io.axiProfiling, subentryBuffer.io.axiProfiling, responseGenerator.io.axiProfiling)
+      val subModulesProfilingInterfaces = Array(mshrManager.io.axiProfiling, subentryBuffer.io.axiProfiling, responseGenerator.io.axiProfiling)
       require(Profiling.subModuleAddrWidth >= log2Ceil(subModulesProfilingInterfaces.length))
       val profilingAddrDecoupledIO = Wire(DecoupledIO(UInt((Profiling.regAddrWidth + Profiling.subModuleAddrWidth).W)))
       profilingAddrDecoupledIO.bits := io.axiProfiling.axi.ARADDR

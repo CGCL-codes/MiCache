@@ -96,7 +96,7 @@ numMemoryPorts=${numMemoryPorts}
 	def ipName(): String = s"""FPGAMSHR_ra${FPGAMSHR.reqAddrWidth}
 _id${FPGAMSHR.reqIdWidth}
 _in${FPGAMSHR.numInputs}
-_mlx_bk${FPGAMSHR.numReqHandlers}
+_mlx_unibk${FPGAMSHR.numReqHandlers}
 _ht${FPGAMSHR.numHashTables}
 _mshr${FPGAMSHR.numMSHRPerHashTable}
 _st${if(FPGAMSHR.numHashTables > 0) FPGAMSHR.mshrAssocMemorySize else 0}

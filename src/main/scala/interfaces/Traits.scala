@@ -44,3 +44,7 @@ trait HasTag extends Bundle {
   val tagWidth: Int
   val tag = UInt(tagWidth.W)
 }
+
+trait HasIsMSHR extends Bundle {
+  val isMSHR = Bool()
+}
