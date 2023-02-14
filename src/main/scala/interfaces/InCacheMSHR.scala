@@ -4,6 +4,8 @@ import chisel3._
 import chisel3.util._
 import scala.language.reflectiveCalls
 
+// Classes of unified storage type for both cachelines and MSHRs
+
 class UniCacheLine(val tagWidth: Int, val dataWidth: Int) extends Bundle with HasIsMSHR with HasTag with HasData {
 	override def cloneType = (new UniCacheLine(tagWidth, dataWidth)).asInstanceOf[this.type]
 }

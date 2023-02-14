@@ -9,37 +9,8 @@ import chisel3.core.dontTouch
 import scala.language.reflectiveCalls
 
 import java.io._ // To generate the BRAM initialization files
-/*
-object MSHR {
-	val addrWidth = 30 /* Excluding the part that is always 0, i.e. the log2Ceil(reqDataWidth) least significant bits, and the req handler address (log2Ceil(numReqHandlers)) */
-	val idWidth = 8
-	val memDataWidth = 512
-	val memDataBurstLength = 4
-	val ldBufRowAddrWidth = 8
-	val reqDataWidth = 32
-	val MSHRAlmostFullMargin = 8
 
-	val numHashTables = 2
-	val numMSHRPerHashTable = 64
-	val assocMemorySize = 4
-
-	val bramLatency = 2
-	val pipelineLatency = 4
-	val maxMultConstWidth = 17 // If larger, the hash function will not be entirely mapped to a DSP48, failing timing
-
-	val numControlRegisters = 2
-	/* axiControl */
-	val axiControlDataWidth = 32
-	val axiControlAddrWidth = log2Ceil(MSHR.numControlRegisters)
-	/* Register map of axiControl */
-	val offendingTagAddr = 0
-	val offendingBranchAddr = 1
-
-	val offsetWidth = log2Ceil(memDataWidth / reqDataWidth)
-	val tagWidth = addrWidth - offsetWidth
-}
-*/
-class UniStorage(
+class InCacheMSHR(
 	addrWidth:            Int=MSHR.addrWidth,
 	numMSHRPerHashTable:  Int=MSHR.numMSHRPerHashTable,
 	numHashTables:        Int=MSHR.numHashTables,
@@ -381,54 +352,3 @@ class UniStorage(
 	}
 
 }
-/*
-class MSHRStash(tagWidth: Int, ldBufRowAddrWidth: Int, numEntries: Int, lastTableIdxWidth: Int) extends Module {
-	val entryWithValidType = new MSHREntryValidLastTable(tagWidth, ldBufRowAddrWidth, lastTableIdxWidth)
-	val entryType = new MSHREntryLastTable(tagWidth, ldBufRowAddrWidth, lastTableIdxWidth)
-	val io = IO(new Bundle{
-		val enq = Flipped(DecoupledIO(entryType))
-		val deq = DecoupledIO(entryType)
-		val pipelineReady = Input(Bool())
-		val lookupTag = Flipped(ValidIO(UInt(tagWidth.W)))
-		val matchingLdBufPtr = ValidIO(UInt(ldBufRowAddrWidth.W))
-		val deallocMatchingEntry = Input(Bool())
-	})
-
-	// val invalidMemoryEntry = Wire(entryWithValidType)
-	// invalidMemoryEntry.valid := false.B
-	// invalidMemoryEntry.tag := DontCare
-	// invalidMemoryEntry.ldBufPtr := DontCare
-	// invalidMemoryEntry.lastTableIdx := DontCare
-	val invalidMemoryEntry = entryWithValidType.getInvalidEntry()
-	val memory = RegInit(Vec(Seq.fill(numEntries)(invalidMemoryEntry)))
-	val emptyEntrySelect = PriorityEncoderOH(memory.map(x => ~x.valid))
-	val full = Vec(memory.map(x => x.valid)).asUInt.andR
-	val almostFull = PopCount(memory.map(x => x.valid)) >= 1.U // number of pipeline stages - 1 ?
-	io.enq.ready := ~almostFull & ~full
-	val outputArbiter = Module(new ResettableRRArbiter(entryType, numEntries))
-	//val matchWithIncomingValue = (io.enq.bits.tag === io.lookupTag.bits) & io.lookupTag.valid & io.enq.valid
-	val matches = memory.map(x => (x.tag === io.lookupTag.bits) & io.lookupTag.valid & x.valid)/* ++ Array(matchWithIncomingValue)*/
-	for(i <- 0 until numEntries) {
-		// insertion
-		when(io.enq.valid & io.pipelineReady & /*~(matchWithIncomingValue & io.deallocMatchingEntry) &*/ Mux(io.deq.ready & io.deq.valid, outputArbiter.io.in(i).ready & outputArbiter.io.in(i).valid, emptyEntrySelect(i))) {
-		//memory(i).valid := true.B
-		memory(i).setValid()
-		memory(i).tag := io.enq.bits.tag
-		memory(i).ldBufPtr := io.enq.bits.ldBufPtr
-		memory(i).lastTableIdx := io.enq.bits.lastTableIdx
-		} .elsewhen(io.pipelineReady & (outputArbiter.io.in(i).ready | (matches(i) & io.deallocMatchingEntry))) { // value consumed or deallocated
-		//memory(i).valid := false.B
-		memory(i).invalidate()
-		}
-		outputArbiter.io.in(i).valid := memory(i).valid & ~(matches(i) & io.deallocMatchingEntry)
-		outputArbiter.io.in(i).bits.tag := memory(i).tag
-		outputArbiter.io.in(i).bits.ldBufPtr := memory(i).ldBufPtr
-		outputArbiter.io.in(i).bits.lastTableIdx := memory(i).lastTableIdx
-	}
-	outputArbiter.io.out <> io.deq
-	io.matchingLdBufPtr.bits := Mux1H(matches, memory.map(x => x.ldBufPtr) ++ Array(io.enq.bits.ldBufPtr))
-	io.matchingLdBufPtr.valid := Vec(matches).asUInt.orR
-	val DEBUG_dataLost = io.enq.valid & full & ~io.deq.ready
-	dontTouch(DEBUG_dataLost)
-}
-*/
