@@ -158,7 +158,8 @@ class InCacheMSHR(
 	/* Memories instantiation and interconnection */
 	/* Memories are initialized with all zeros, which is fine for us since all the valids will be false */
 	val memories = Array.fill(numHashTables)(Module(new XilinxSimpleDualPortNoChangeBRAM(width=memWidth, depth=numMSHRPerHashTable)).io)
-	val storeToLoads = Array.fill(numHashTables)(Module(new StoreToLoadForwardingTwoStages(memType, hashTableAddrWidth)).io)
+	val storeToLoads = Array.fill(numHashTables)(Module(new StoreToLoadForwardingTwoStages(MSHRType, hashTableAddrWidth)).io)
+	val memDataOut = Wire(Vec(numHashTables, memType))
 	for (i <- 0 until numHashTables) {
 		memories(i).clock := clock
 		memories(i).reset := reset
@@ -169,7 +170,11 @@ class InCacheMSHR(
 		memories(i).regceb := pipelineReady
 		storeToLoads(i).pipelineReady := pipelineReady
 		// storeToLoads(i).dataInFromMem := memType.fromBits(memories(i).doutb)
-		storeToLoads(i).dataInFromMem := memories(i).doutb.asTypeOf(memType)
+		memDataOut(i) := memories(i).doutb.asTypeOf(memType)
+		storeToLoads(i).dataInFromMem.valid    := memDataOut(i).valid
+		storeToLoads(i).dataInFromMem.isMSHR   := memDataOut(i).isMSHR
+		storeToLoads(i).dataInFromMem.tag      := memDataOut(i).tag
+		storeToLoads(i).dataInFromMem.ldBufPtr := memDataOut(i).data.asTypeOf(MSHRLdBufType)
 	}
 	// 查找匹配项，包括读取出的BRAM中的项、流水线中的项、stash中的项
 	val dataRead = storeToLoads.map(x => x.dataInFixed)
@@ -183,14 +188,14 @@ class InCacheMSHR(
 	stash.io.deallocMatchingEntry := delayedRequest.last.valid & ~delayedRequest.last.bits.isAlloc
 	stash.io.pipelineReady := pipelineReady
 	val allMatches = MSHRMatches ++ pipelineMatches ++ Array(stash.io.matchingLdBufPtr.valid)
-	val selectedLdBufPtr = Mux1H(allMatches, dataRead.map(x => x.data.asTypeOf(MSHRLdBufType)) ++ delayedRequest.dropRight(1).map(x => x.bits.ldBufPtr) ++ Array(stash.io.matchingLdBufPtr.bits))
+	val selectedLdBufPtr = Mux1H(allMatches, dataRead.map(x => x.data.ldBufPtr) ++ delayedRequest.dropRight(1).map(x => x.bits.ldBufPtr) ++ Array(stash.io.matchingLdBufPtr.bits))
 	val mshrHit = Vec(allMatches).asUInt.orR
 	val allValid = Vec(dataRead.map(x => x.valid)).asUInt.andR
 	val allIsMSHR = Vec(dataRead.map(x => x.isMSHR)).asUInt.andR /* all = all hash tables */
 	val allFull = allValid & allIsMSHR /* all = all hash tables */
 
 	val cacheHit = Vec(cacheMatches).asUInt.orR
-    val selectedLine = Mux1H(cacheMatches, dataRead.map(_.data))
+    val selectedLine = Mux1H(cacheMatches, memDataOut.map(_.data)) // since no cache line forwarding, just take data from memory port
     val delayedOffset = getOffset(delayedRequest.last.bits.addr)
     val selectedData = MuxLookup(delayedOffset, selectedLine.data(reqDataWidth-1, 0), (0 until memDataWidth by reqDataWidth).map(i => (i/reqDataWidth).U -> selectedLine.data(i+reqDataWidth-1, i)))
 
@@ -244,10 +249,22 @@ class InCacheMSHR(
 							(isDelayedAlloc & !hit & Mux(allFull, evictOH(i), hashTableToUpdate(i))) | (isDelayedDealloc & hashTableMatches(i)))
 		storeToLoads(i).wrEn := memories(i).wea
 		memories(i).dina := updatedData.asUInt
-		storeToLoads(i).dataOutToMem := updatedData
+		// storeToLoads(i).dataOutToMem := updatedData
+		storeToLoads(i).dataOutToMem.valid    := updatedData.valid
+		storeToLoads(i).dataOutToMem.isMSHR   := updatedData.isMSHR
+		storeToLoads(i).dataOutToMem.tag      := updatedData.tag
+		storeToLoads(i).dataOutToMem.ldBufPtr := updatedData.data.asTypeOf(MSHRLdBufType)
 	}
 	io.frqIn.ready := isDelayedAlloc & !hit & pipelineReady & ~isDelayedFromStash
 	fakeRRArbiterForSelect.io.out.ready := io.frqIn.ready
+
+	/* Another way to work around the cache line forwarding problem: stalling. The deallocation of an MSHR and the next request to the corresponding
+	   cache line must set a gap of two cycles to make the updated data visible to the request. Thus we can insert some stalls into the pipeline, or
+	   more specifically, the allocation part of the pipeline. So we can just reject the io.allocIn. */
+	val allocWaitToUpdateMatch1 = Wire(Bool())
+	val allocWaitToUpdateMatch2 = Wire(Bool())
+	allocWaitToUpdateMatch1 := (getTag(io.allocIn.bits.addr) === getTag(delayedRequest(0).bits.addr)) & ~delayedRequest(0).bits.isAlloc & delayedRequest(0).valid
+	allocWaitToUpdateMatch2 := (getTag(io.allocIn.bits.addr) === getTag(delayedRequest(1).bits.addr)) & ~delayedRequest(1).bits.isAlloc & delayedRequest(1).valid
 
 	// val allocatedMSHRCounter = Module(new SimultaneousUpDownSaturatingCounter(numMSHRTotal, 0))
 	// allocatedMSHRCounter.io.load := false.B
@@ -276,7 +293,7 @@ class InCacheMSHR(
 	// val MSHRAlmostFull = allocatedMSHRCounter.io.currValue >= (io.maxAllowedMSHRs - MSHRAlmostFullMargin.U)
 	val MSHRAlmostFull = allocatedMSHRCounter >= (io.maxAllowedMSHRs - MSHRAlmostFullMargin.U)
 
-	stopAllocs := MSHRAlmostFull | io.stopAllocFromLdBuf | stallOnlyAllocs
+	stopAllocs := MSHRAlmostFull | io.stopAllocFromLdBuf | stallOnlyAllocs | allocWaitToUpdateMatch1 | allocWaitToUpdateMatch2
 	// stopAllocs := io.stopAllocFromLdBuf | stallOnlyAllocs
 	stopDeallocs := false.B
 

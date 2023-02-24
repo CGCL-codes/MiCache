@@ -97,6 +97,7 @@ numMemoryPorts=${numMemoryPorts}
 _id${FPGAMSHR.reqIdWidth}
 _in${FPGAMSHR.numInputs}
 _mlx_unibk${FPGAMSHR.numReqHandlers}
+_st
 _ht${FPGAMSHR.numHashTables}
 _mshr${FPGAMSHR.numMSHRPerHashTable}
 _st${if(FPGAMSHR.numHashTables > 0) FPGAMSHR.mshrAssocMemorySize else 0}
