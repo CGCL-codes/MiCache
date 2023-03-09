@@ -113,16 +113,16 @@ class RequestHandlerCuckoo(reqAddrWidth: Int=RequestHandler.reqAddrWidth, reqDat
   mshrManager.io.maxAllowedMSHRs := io.maxAllowedMSHRs
 
   /* SubentryBuffer */
-  val subentryBuffer = Module(new SubentryBuffer(reqIdWidth, memDataWidth, reqDataWidth, subentriesAddrWidth, numSubentriesPerRow, MSHR.pipelineLatency, nextPtrCacheSize, blockOnNextPtr))
-  subentryBuffer.io.in <> mshrManager.io.outLdBuf
-  subentryBuffer.io.frqOut <> mshrManager.io.frqIn
-  mshrManager.io.stopAllocFromLdBuf := subentryBuffer.io.stopAlloc
-  subentryBuffer.io.maxAllowedSubentries := io.maxAllowedSubentries
+  // val subentryBuffer = Module(new SubentryBuffer(reqIdWidth, memDataWidth, reqDataWidth, subentriesAddrWidth, numSubentriesPerRow, MSHR.pipelineLatency, nextPtrCacheSize, blockOnNextPtr))
+  // subentryBuffer.io.in <> mshrManager.io.outLdBuf
+  // subentryBuffer.io.frqOut <> mshrManager.io.frqIn
+  // mshrManager.io.stopAllocFromLdBuf := subentryBuffer.io.stopAlloc
+  // subentryBuffer.io.maxAllowedSubentries := io.maxAllowedSubentries
 
   /* ResponseGenerator */
   // val responseGenerator = Module(new ResponseGenerator(reqIdWidth, memDataWidth, reqDataWidth, numSubentriesPerRow, RequestHandler.responseGeneratorPorts))
-  val responseGenerator = Module(new ResponseGeneratorOneOutputArbitraryEntriesPerRow(reqIdWidth, memDataWidth, reqDataWidth, numSubentriesPerRow))
-  responseGenerator.io.in <> subentryBuffer.io.respGenOut
+  val responseGenerator = Module(new ResponseGeneratorOneOutputArbitraryEntriesPerRow(reqIdWidth, memDataWidth, reqDataWidth, mshrManager.numEntriesPerLine))
+  responseGenerator.io.in <> mshrManager.io.respGenOut
 
   /* Returned data */
   val returnedDataArbiter = Module(new ResettableRRArbiter(new DataIdIO(reqDataWidth, reqIdWidth), 2))
@@ -137,7 +137,7 @@ class RequestHandlerCuckoo(reqAddrWidth: Int=RequestHandler.reqAddrWidth, reqDat
   /* Profiling */
   if (Profiling.enable) {
       // val subModulesProfilingInterfaces = Array(cache.io.axiProfiling, mshrManager.io.axiProfiling, subentryBuffer.io.axiProfiling, responseGenerator.io.axiProfiling)
-      val subModulesProfilingInterfaces = Array(mshrManager.io.axiProfiling, subentryBuffer.io.axiProfiling, responseGenerator.io.axiProfiling)
+      val subModulesProfilingInterfaces = Array(mshrManager.io.axiProfiling, responseGenerator.io.axiProfiling)
       require(Profiling.subModuleAddrWidth >= log2Ceil(subModulesProfilingInterfaces.length))
       val profilingAddrDecoupledIO = Wire(DecoupledIO(UInt((Profiling.regAddrWidth + Profiling.subModuleAddrWidth).W)))
       profilingAddrDecoupledIO.bits := io.axiProfiling.axi.ARADDR

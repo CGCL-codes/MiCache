@@ -44,8 +44,10 @@ object FPGAMSHR {
 		cacheSizeBytes          = fileConfig.getInt("cacheSizeBytes")
 		cacheSizeReductionWidth = fileConfig.getInt("cacheSizeReductionWidth")
 
-		numHashTables           = fileConfig.getInt("numHashTables")
-		numMSHRPerHashTable     = fileConfig.getInt("numMSHRPerHashTable")
+		// numHashTables           = fileConfig.getInt("numHashTables")
+		// numMSHRPerHashTable     = fileConfig.getInt("numMSHRPerHashTable")
+		numHashTables           = numCacheWays
+		numMSHRPerHashTable     = (cacheSizeBytes / (memDataWidth / 8)) / numCacheWays
 		mshrAssocMemorySize     = fileConfig.getInt("mshrAssocMemorySize")
 		mshrAlmostFullRelMargin = fileConfig.getInt("mshrAlmostFullRelMargin")
 		sameHashFunction        = fileConfig.getInt("sameHashFunction") != 0
@@ -97,18 +99,26 @@ numMemoryPorts=${numMemoryPorts}
 _id${FPGAMSHR.reqIdWidth}
 _in${FPGAMSHR.numInputs}
 _mlx_unibk${FPGAMSHR.numReqHandlers}
-_st
 _ht${FPGAMSHR.numHashTables}
 _mshr${FPGAMSHR.numMSHRPerHashTable}
 _st${if(FPGAMSHR.numHashTables > 0) FPGAMSHR.mshrAssocMemorySize else 0}
-_se${FPGAMSHR.numSubentriesPerRow}
-_ser${if(FPGAMSHR.numHashTables > 0) FPGAMSHR.subentryAddrWidth else 0}
-_npc${if(FPGAMSHR.numHashTables > 0) FPGAMSHR.nextPtrCacheSize else 0}
-${if (FPGAMSHR.blockOnNextPtr) "_nonextptr" else ""}
+_se${FPGAMSHR.calSubentryPerLine()}
 ${if (FPGAMSHR.sameHashFunction) "_nocuckoo" else ""}
 _cw${if((FPGAMSHR.cacheSizeBytes > 0) && (FPGAMSHR.numCacheWays > 0)) FPGAMSHR.numCacheWays else 0}
 _csz${if((FPGAMSHR.cacheSizeBytes > 0) && (FPGAMSHR.numCacheWays > 0)) FPGAMSHR.cacheSizeBytes else 0}
 _xpc${FPGAMSHR.numMemoryPorts}""".replace("\n", "") + (if(FPGAMSHR.useROB) "_rob" else "") + (if(Profiling.enable) "" else "_noprof")
+
+	def calSubentryPerLine(): Int = {
+		val idWidth = FPGAMSHR.reqIdWidth + log2Ceil(FPGAMSHR.numInputs)
+		val offsetWidth = log2Ceil(FPGAMSHR.memDataWidth / FPGAMSHR.reqDataWidth)
+		val max = FPGAMSHR.memDataWidth / (offsetWidth + idWidth)
+		val maxIdxWidth = log2Ceil(max)
+		val exceeded = max * (offsetWidth + idWidth) + log2Ceil(max) > FPGAMSHR.memDataWidth
+		println(s"max entry count=${max}, max index width=${maxIdxWidth}, lineWidth=${FPGAMSHR.memDataWidth}, offsetWidth=${offsetWidth}, idWidth=${idWidth}")
+		val lastValidIdxWidth = if (exceeded) log2Ceil(max - 1) else maxIdxWidth
+		val entriesPerLine = if (exceeded) max - 1 else max
+		entriesPerLine
+	}
 
 	var reqAddrWidth = 0
 	var memAddrWidth = 0

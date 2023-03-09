@@ -178,7 +178,7 @@ class ResponseGeneratorOneOutputArbitraryEntriesPerRow(idWidth: Int=ResponseGene
     val maxOffset = (1 << offsetWidth) - 1
     val inputQueuesDepth = ResponseGenerator.inputQueuesDepth
     val io = IO(new Bundle{
-      val in = Flipped(DecoupledIO(new RespGenIO(memDataWidth, offsetWidth, idWidth, numEntriesPerRow)))
+      val in = Flipped(DecoupledIO(new UniRespGenIO(memDataWidth, offsetWidth, idWidth, numEntriesPerRow)))
       val out = DecoupledIO(new DataIdIO(reqDataWidth, idWidth))
       val axiProfiling = new AXI4LiteReadOnlyProfiling(Profiling.dataWidth, Profiling.regAddrWidth)
     })

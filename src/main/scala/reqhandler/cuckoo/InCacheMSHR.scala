@@ -28,12 +28,14 @@ class InCacheMSHR(
 	val offsetWidth = log2Ceil(memDataWidth / reqDataWidth)
 	val tagWidth = addrWidth - offsetWidth
 	val numMSHRTotal = numMSHRPerHashTable * numHashTables
+
 	val memType = new UniCacheLineValid(tagWidth, memDataWidth)
 	val memWidth = memType.getWidth
 	val cacheDataType = memType.data.cloneType
-	val MSHRType = new UniMSHREntryValid(tagWidth, ldBufRowAddrWidth)
-	val MSHRLdBufType = MSHRType.ldBufPtr.cloneType
-	val entryType = new MSHREntry(tagWidth, ldBufRowAddrWidth)
+	val mshrType = new UniMSHREntryValid(tagWidth, memDataWidth, offsetWidth, idWidth)
+	val subentryLineType = mshrType.sub.cloneType
+	val numEntriesPerLine = mshrType.sub.entriesPerLine
+
 	val hashTableAddrWidth = log2Ceil(numMSHRPerHashTable)
 	val hashMultConstWidth = if (tagWidth > MSHR.maxMultConstWidth) MSHR.maxMultConstWidth else tagWidth
 	val hbmChannelWidth = 28 - offsetWidth - log2Ceil(reqDataWidth / 8)
@@ -54,16 +56,10 @@ class InCacheMSHR(
 	val io = IO(new Bundle {
 		val allocIn = Flipped(DecoupledIO(new AddrIdIO(addrWidth, idWidth)))
 		val deallocIn = Flipped(DecoupledIO(new AddrDataIO(addrWidth, memDataWidth)))
-		/* FRQ = free (load buffer) row queue */
-		val frqIn = Flipped(DecoupledIO(UInt(ldBufRowAddrWidth.W)))
-		/* Output to the load buffer unit */
-		val outLdBuf = DecoupledIO(new MSHRToLdBufIO(offsetWidth, idWidth, dataWidth=memDataWidth, rowAddrWidth=ldBufRowAddrWidth))
-		/* Raised by the load buffer unit when the FRQ is empty and allocations
-		* need to be stalled. */
-		val stopAllocFromLdBuf = Input(Bool())
 		/* Interface to memory arbiter, with burst requests to be sent to DDR */
 		val outMem = DecoupledIO(UInt(tagWidth.W))
 		val respOut = DecoupledIO(new DataIdIO(reqDataWidth, idWidth))
+		val respGenOut = DecoupledIO(new UniRespGenIO(memDataWidth, offsetWidth, idWidth, numEntriesPerLine))
 		val axiProfiling = new AXI4LiteReadOnlyProfiling(Profiling.dataWidth, Profiling.regAddrWidth)
 		/* MSHR will stop accepting allocations when we reach this number of MSHRs. By making this Value
 		* configurable at runtime, we can quickly explore the impact of reducing the number of MSHRs without
@@ -73,53 +69,43 @@ class InCacheMSHR(
 
 	val pipelineReady = Wire(Bool())
 
-	// 输入端口有两类输入，即分配与释放，释放的优先级更高
 	/* Input logic */
 	val inputArbiter = Module(new Arbiter(new AddrDataIdIO(addrWidth, memDataWidth, idWidth), 2))
 	val stopAllocs = Wire(Bool())
 	val stopDeallocs = Wire(Bool())
 	val stallOnlyAllocs = Wire(Bool())
 
-	// connectWithEnable(inputArbiter.io.in(0), io.deallocIn, ~stopDeallocs)
-	// inputArbiter.io.in(0).connectWithEnable(io.deallocIn, ~stopDeallocs)
+	inputArbiter.io.in(0).valid     := io.deallocIn.valid & ~stopDeallocs
+	inputArbiter.io.in(0).bits.addr := io.deallocIn.bits.addr
+	inputArbiter.io.in(0).bits.data := io.deallocIn.bits.data
+	io.deallocIn.ready              := inputArbiter.io.in(0).ready & ~stopDeallocs
 
-	inputArbiter.io.in(0).valid      := io.deallocIn.valid & ~stopDeallocs
-	inputArbiter.io.in(0).bits.addr  := io.deallocIn.bits.addr
-	inputArbiter.io.in(0).bits.data  := io.deallocIn.bits.data
-	io.deallocIn.ready := inputArbiter.io.in(0).ready & ~stopDeallocs
+	inputArbiter.io.in(1).valid     := io.allocIn.valid & ~stopAllocs
+	inputArbiter.io.in(1).bits.addr := io.allocIn.bits.addr
+	inputArbiter.io.in(1).bits.id   := io.allocIn.bits.id
+	io.allocIn.ready                := inputArbiter.io.in(1).ready & ~stopAllocs
 
-	inputArbiter.io.in(1).valid      := io.allocIn.valid & ~stopAllocs
-	inputArbiter.io.in(1).bits.addr  := io.allocIn.bits.addr
-	inputArbiter.io.in(1).bits.id    := io.allocIn.bits.id
-	io.allocIn.ready   := inputArbiter.io.in(1).ready & ~stopAllocs
-
-	// 第二层仲裁器，优先级低的输入源即stash的输出，实现了闲时插回的效果
 	/* Arbiter between input and stash. Input has higher priority: we try to put back
 	* entries in the tables "in the background". */
-	val stashArbiter = Module(new Arbiter(new AddrDataIdAllocLdBufPtrLastTableIO(addrWidth, memDataWidth, idWidth, ldBufRowAddrWidth, log2Ceil(numHashTables)), 2))
+	val stashArbiter = Module(new Arbiter(new AddrDataIdAllocIO(addrWidth, memDataWidth, idWidth), 2))
 	/* Queue containing entries that have been kicked out from the hash tables, and that we will try
 	* to put back in one of their other possible locations. */
-	val stash = Module(new MSHRStash(tagWidth, ldBufRowAddrWidth, assocMemorySize, log2Ceil(numHashTables)))
-	stashArbiter.io.in(0).valid := inputArbiter.io.out.valid
-	stashArbiter.io.in(0).bits := DontCare
-	stashArbiter.io.in(0).bits.addr := inputArbiter.io.out.bits.addr
-	stashArbiter.io.in(0).bits.data := inputArbiter.io.out.bits.data
-	stashArbiter.io.in(0).bits.id := inputArbiter.io.out.bits.id
+	val stash = Module(new InCacheMSHRStash(mshrType, assocMemorySize, log2Ceil(numHashTables)))
+	stashArbiter.io.in(0).valid        := inputArbiter.io.out.valid
+	stashArbiter.io.in(0).bits.addr    := inputArbiter.io.out.bits.addr
+	stashArbiter.io.in(0).bits.data    := inputArbiter.io.out.bits.data
+	stashArbiter.io.in(0).bits.id      := inputArbiter.io.out.bits.id
 	stashArbiter.io.in(0).bits.isAlloc := inputArbiter.io.chosen === 1.U
-	// stashArbiter.io.in(0).bits.ldBufPtr := DontCare
-	// stashArbiter.io.in(0).bits.lastTableIdx := DontCare
-	//stashArbiter.io.in(0).bits.
-	inputArbiter.io.out.ready := stashArbiter.io.in(0).ready
-	stashArbiter.io.in(1).valid := stash.io.deq.valid
-	stashArbiter.io.in(1).bits := DontCare
-	stashArbiter.io.in(1).bits.addr := Cat(stash.io.deq.bits.tag, 0.U(offsetWidth.W))
+	inputArbiter.io.out.ready          := stashArbiter.io.in(0).ready
+
+	stashArbiter.io.in(1).valid        := stash.io.outToPipeline.valid
+	stashArbiter.io.in(1).bits         := DontCare
+	stashArbiter.io.in(1).bits.addr    := Cat(stash.io.outToPipeline.bits, 0.U(offsetWidth.W))
 	stashArbiter.io.in(1).bits.isAlloc := true.B
-	stashArbiter.io.in(1).bits.ldBufPtr := stash.io.deq.bits.ldBufPtr
-	stashArbiter.io.in(1).bits.lastTableIdx := stash.io.deq.bits.lastTableIdx
-	stash.io.deq.ready := stashArbiter.io.in(1).ready
+	stash.io.outToPipeline.ready       := stashArbiter.io.in(1).ready
+
 	stashArbiter.io.out.ready := pipelineReady
 
-	// 4级流水线：哈希计算，地址读取，等待2周期得到结果
 	/* Pipeline */
 	/* stashArbiter.io.out -> register -> hash computation -> memory read address and register -> register -> data coming back from memory */
 	val delayedRequest = Wire(Vec(MSHR.pipelineLatency, ValidIO(stashArbiter.io.out.bits.cloneType)))
@@ -127,100 +113,102 @@ class InCacheMSHR(
 	* Entries from the stash behave like allocations but they do not generate a new read to memory
 	* nor a new allocation to the load buffer if they do not hit. */
 	val delayedIsFromStash = Wire(Vec(MSHR.pipelineLatency, Bool()))
-	/* One bool per pipeline stage, true if the entry in that pipeline stage comes from the stash
-	* and delayedRequest is a corresponding deallocation for it. */
-	val deallocPipelineEntries = delayedRequest.zip(delayedIsFromStash).dropRight(1).map(x => (getTag(x._1.bits.addr) === getTag(delayedRequest.last.bits.addr)) & delayedRequest.last.valid & ~delayedRequest.last.bits.isAlloc & x._2)
-	val isDelayedAlloc = delayedRequest.last.bits.isAlloc & delayedRequest.last.valid
-	val isDelayedDealloc = ~delayedRequest.last.bits.isAlloc & delayedRequest.last.valid
 	val isDelayedFromStash = delayedIsFromStash.last
-	delayedRequest(0).bits := RegEnable(stashArbiter.io.out.bits, enable=pipelineReady)
+	val isDelayedValid     = delayedRequest.last.valid & ~(isDelayedFromStash & ~stash.io.hit)
+	val isDelayedAlloc     = delayedRequest.last.bits.isAlloc & isDelayedValid
+	val isDelayedDealloc   = ~delayedRequest.last.bits.isAlloc & isDelayedValid
+	delayedRequest(0).bits  := RegEnable(stashArbiter.io.out.bits, enable=pipelineReady)
 	delayedRequest(0).valid := RegEnable(stashArbiter.io.out.valid, enable=pipelineReady, init=false.B)
-	delayedIsFromStash(0) := RegEnable(stashArbiter.io.chosen === 1.U, enable=pipelineReady)
-	for(i <- 1 until MSHR.pipelineLatency) {
-		delayedRequest(i).bits := RegEnable(delayedRequest(i-1).bits, enable=pipelineReady)
-		/* Implement in-flight deallocation of entries from the stash if delayedRequest is the corresponding deallocation. */
-		delayedRequest(i).valid := RegEnable(delayedRequest(i-1).valid & ~deallocPipelineEntries(i-1), enable=pipelineReady, init=false.B)
-		delayedIsFromStash(i) := RegEnable(delayedIsFromStash(i-1), enable=pipelineReady)
+	delayedIsFromStash(0)   := RegEnable(stashArbiter.io.chosen === 1.U, enable=pipelineReady)
+	for (i <- 1 until MSHR.pipelineLatency) {
+		delayedRequest(i).bits  := RegEnable(delayedRequest(i - 1).bits, enable=pipelineReady)
+		delayedRequest(i).valid := RegEnable(delayedRequest(i - 1).valid, enable=pipelineReady, init=false.B)
+		delayedIsFromStash(i)   := RegEnable(delayedIsFromStash(i - 1), enable=pipelineReady)
 	}
 
-	// 根据cache line的tag进行哈希计算，得到MSHR阵列中的地址
 	/* Address hashing */
 	val r = new scala.util.Random(42)
 	val a = (0 until numHashTables).map(_ => r.nextInt(1 << hashMultConstWidth))
 	// val b = (0 until numHashTables).map(_ => r.nextInt(1 << hashTableAddrWidth))
-	val hashedTags = (0 until numHashTables).map(i => if(sameHashFunction) hash(a(0), getTag(delayedRequest(0).bits.addr)) else hash(a(i), getTag(delayedRequest(0).bits.addr)))
+	val hashedTags = (0 until numHashTables).map(i => if (sameHashFunction) hash(a(0), getTag(delayedRequest(0).bits.addr)) else hash(a(i), getTag(delayedRequest(0).bits.addr)))
 	// val hashedTags = (0 until numHashTables).map(i => if(sameHashFunction) hash(a(0), b(0), getTag(delayedRequest(0).bits.addr)) else hash(a(i), b(i), getTag(delayedRequest(0).bits.addr)))
 	//a.indices.foreach(i => println(s"a($i)=${a(i)}"))
 	/* Uncomment to print out hashing parameters a and b */
 	// a.indices.foreach(i => println(s"a($i)=${a(i)} b($i)=${b(i)}"))
 
-	// MSHR读取逻辑
 	/* Memories instantiation and interconnection */
 	/* Memories are initialized with all zeros, which is fine for us since all the valids will be false */
 	val memories = Array.fill(numHashTables)(Module(new XilinxSimpleDualPortNoChangeBRAM(width=memWidth, depth=numMSHRPerHashTable)).io)
-	val storeToLoads = Array.fill(numHashTables)(Module(new StoreToLoadForwardingTwoStages(MSHRType, hashTableAddrWidth)).io)
-	val memDataOut = Wire(Vec(numHashTables, memType))
+	val storeToLoad = Module(new SharedStoreToLoadForwardingTwoStages(memType, hashTableAddrWidth, numHashTables)).io
 	for (i <- 0 until numHashTables) {
 		memories(i).clock := clock
 		memories(i).reset := reset
-		memories(i).addrb := RegEnable(hashedTags(i), enable=pipelineReady)
-		storeToLoads(i).rdAddr := RegEnable(hashedTags(i), enable=pipelineReady)
-
-		memories(i).enb := pipelineReady
-		memories(i).regceb := pipelineReady
-		storeToLoads(i).pipelineReady := pipelineReady
-		// storeToLoads(i).dataInFromMem := memType.fromBits(memories(i).doutb)
-		memDataOut(i) := memories(i).doutb.asTypeOf(memType)
-		storeToLoads(i).dataInFromMem.valid    := memDataOut(i).valid
-		storeToLoads(i).dataInFromMem.isMSHR   := memDataOut(i).isMSHR
-		storeToLoads(i).dataInFromMem.tag      := memDataOut(i).tag
-		storeToLoads(i).dataInFromMem.ldBufPtr := memDataOut(i).data.asTypeOf(MSHRLdBufType)
+		val rdAddri = RegEnable(hashedTags(i), enable=pipelineReady)
+		memories(i).addrb             := rdAddri
+		memories(i).enb               := pipelineReady
+		memories(i).regceb            := pipelineReady
+		storeToLoad.rdAddrs(i)        := rdAddri
+		storeToLoad.dataInFromMems(i) := memories(i).doutb.asTypeOf(memType)
 	}
-	// 查找匹配项，包括读取出的BRAM中的项、流水线中的项、stash中的项
-	val dataRead = storeToLoads.map(x => x.dataInFixed)
-	/* Matching and stash deallocation logic */
+	storeToLoad.pipelineReady := pipelineReady
+
+	/* Matching logic */
+	val dataRead = storeToLoad.dataInFixeds
 	val hashTableMatches = dataRead.map(x => x.valid & x.tag === getTag(delayedRequest.last.bits.addr))
+	stash.io.lookupTag.bits       := getTag(delayedRequest.last.bits.addr)
+	stash.io.lookupTag.valid      := delayedRequest.last.valid
+	stash.io.pipelineReady        := pipelineReady
+	stash.io.deallocMatchingEntry := isDelayedDealloc | isDelayedFromStash
+	val allMatches = hashTableMatches ++ Array(stash.io.hit)
+	val selectedData = Mux1H(allMatches, dataRead.map(x => x.data) ++ Array(stash.io.matchingSubentryLine.asTypeOf(cacheDataType)))
+
 	val cacheMatches = hashTableMatches.zip(dataRead).map(x => x._1 & ~x._2.isMSHR)
-	val MSHRMatches = hashTableMatches.zip(dataRead).map(x => x._1 & x._2.isMSHR)
-	val pipelineMatches = delayedRequest.zip(delayedIsFromStash).dropRight(1).map(x => (getTag(x._1.bits.addr) === getTag(delayedRequest.last.bits.addr)) & x._1.valid & x._2)
-	stash.io.lookupTag.bits := getTag(delayedRequest.last.bits.addr)
-	stash.io.lookupTag.valid := delayedRequest.last.valid
-	stash.io.deallocMatchingEntry := delayedRequest.last.valid & ~delayedRequest.last.bits.isAlloc
-	stash.io.pipelineReady := pipelineReady
-	val allMatches = MSHRMatches ++ pipelineMatches ++ Array(stash.io.matchingLdBufPtr.valid)
-	val selectedLdBufPtr = Mux1H(allMatches, dataRead.map(x => x.data.ldBufPtr) ++ delayedRequest.dropRight(1).map(x => x.bits.ldBufPtr) ++ Array(stash.io.matchingLdBufPtr.bits))
-	val mshrHit = Vec(allMatches).asUInt.orR
-	val allValid = Vec(dataRead.map(x => x.valid)).asUInt.andR
-	val allIsMSHR = Vec(dataRead.map(x => x.isMSHR)).asUInt.andR /* all = all hash tables */
-	val allFull = allValid & allIsMSHR /* all = all hash tables */
-
 	val cacheHit = Vec(cacheMatches).asUInt.orR
-    val selectedLine = Mux1H(cacheMatches, memDataOut.map(_.data)) // since no cache line forwarding, just take data from memory port
     val delayedOffset = getOffset(delayedRequest.last.bits.addr)
-    val selectedData = MuxLookup(delayedOffset, selectedLine.data(reqDataWidth-1, 0), (0 until memDataWidth by reqDataWidth).map(i => (i/reqDataWidth).U -> selectedLine.data(i+reqDataWidth-1, i)))
+    val hitData = MuxLookup(delayedOffset, selectedData(reqDataWidth-1, 0), (0 until memDataWidth by reqDataWidth).map(i => (i/reqDataWidth).U -> selectedData(i+reqDataWidth-1, i)))
+	val respOutEb = Module(new ElasticBuffer(io.respOut.bits.cloneType))
+	respOutEb.io.in.valid     := isDelayedValid & cacheHit
+	respOutEb.io.in.bits.id   := delayedRequest.last.bits.id
+	respOutEb.io.in.bits.data := hitData
+	respOutEb.io.out          <> io.respOut
 
+	val mshrMatches = hashTableMatches.zip(dataRead).map(x => x._1 & x._2.isMSHR) ++ Array(stash.io.hit)
+	val mshrHit = Vec(mshrMatches).asUInt.orR
 	val hit = mshrHit | cacheHit
 
-	val respOutEb = Module(new ElasticBuffer(io.respOut.bits.cloneType))
-	respOutEb.io.out <> io.respOut
-	respOutEb.io.in.valid := delayedRequest.last.valid & cacheHit
-	respOutEb.io.in.bits.id := delayedRequest.last.bits.id
-	respOutEb.io.in.bits.data := selectedData
-
+// TODO: critical path too long!
 	/* Update logic */
 	val updatedData = Wire(memType)
-	updatedData.valid := delayedRequest.last.valid
+	val updatedSubentryLine = Wire(subentryLineType.cloneType)
+	val selectedSubentryLine = selectedData.asTypeOf(subentryLineType)
+	updatedData.valid  := true.B
 	updatedData.isMSHR := isDelayedAlloc
-	updatedData.tag := getTag(delayedRequest.last.bits.addr)
-	// updatedData.ldBufPtr := Mux(isDelayedFromStash, delayedRequest.last.bits.ldBufPtr, io.frqIn.bits)
-	updatedData.data := Mux(isDelayedDealloc, delayedRequest.last.bits.data, Mux(isDelayedFromStash, delayedRequest.last.bits.ldBufPtr, io.frqIn.bits).asTypeOf(cacheDataType))
+	updatedData.tag    := getTag(delayedRequest.last.bits.addr)
+	updatedData.data   := Mux(isDelayedDealloc, delayedRequest.last.bits.data, Mux(isDelayedFromStash, stash.io.matchingSubentryLine, updatedSubentryLine).asTypeOf(cacheDataType))
+	updatedSubentryLine.lastValidIdx := Mux(mshrHit, selectedSubentryLine.lastValidIdx + 1.U, 0.U)
+	val updateEntryOH = UIntToOH(updatedSubentryLine.lastValidIdx)
+	for (i <- 0 until numEntriesPerLine) {
+		updatedSubentryLine.entries(i).offset := Mux(updateEntryOH(i), getOffset(delayedRequest.last.bits.addr), selectedSubentryLine.entries(i).offset)
+		updatedSubentryLine.entries(i).id     := Mux(updateEntryOH(i), delayedRequest.last.bits.id, selectedSubentryLine.entries(i).id)
+	}
+
+	val subentryAlmostFullStall = Module(new FullSubentryTagArray(tagWidth, MSHR.pipelineLatency)).io
+	subentryAlmostFullStall.in.valid           := (isDelayedAlloc & !cacheHit & (numEntriesPerLine.U - updatedSubentryLine.lastValidIdx <= MSHR.pipelineLatency.U)) | isDelayedDealloc
+	subentryAlmostFullStall.in.bits            := getTag(delayedRequest.last.bits.addr)
+	subentryAlmostFullStall.deallocMatchingTag := isDelayedDealloc
+	subentryAlmostFullStall.pipelineReady      := pipelineReady
+
+	val allValid = Vec(dataRead.map(x => x.valid)).asUInt.andR
+	val allIsMSHR = Vec(dataRead.map(x => x.isMSHR)).asUInt.andR
+	val allFull = allValid & allIsMSHR
 	/* When a tag appears for the first time, we allocate an entry in one of the hash tables (HT).
 	* To better spread the entries among HTs, we want all HTs to have the same priority; however, we can only choose
 	* a hash table for which the entry corresponding to the new tag is free. We use a RRArbiter to implement this functionality, where we
 	* do not care about the value to arbitrate and we use ~entry.valid as valid signal for the arbiter. */
-	// 轮巡地选择哈希表进行存储（当一个键值在所有表中对应的位置未满时，据此选择存储位置）
 	val fakeRRArbiterForSelect = Module(new ResettableRRArbiter(Bool(), numHashTables))
-	for(i <- 0 until numHashTables) fakeRRArbiterForSelect.io.in(i).valid := ~dataRead(i).valid | (allValid & ~dataRead(i).isMSHR)
+	for (i <- 0 until numHashTables) {
+		fakeRRArbiterForSelect.io.in(i).valid := ~dataRead(i).valid | (allValid & ~dataRead(i).isMSHR)
+	}
 	val hashTableToUpdate = UIntToOH(fakeRRArbiterForSelect.io.chosen).toBools
 
 	/* Eviction logic */
@@ -228,52 +216,30 @@ class InCacheMSHR(
 	* We use a round-robin policy also for the first eviction: the index of the last hash
 	* table from which we evicted is stored in evictTableForFirstAttempt.
 	* This round-robin policy is simpler and works better than using an LFSR16. */
-	// 使用计数器来索引淘汰位，但若被插入项来自stash，则插入其所在的原表的下一个表中
 	val evictCounterEnable = Wire(Bool())
 	val evictTableForFirstAttempt = Counter(evictCounterEnable, numHashTables)
 	/* To support non-power-of-two number of tables, we need to implement the wrapping logic manually. */
-	val evictTableForEntryFromStash = Mux(delayedRequest.last.bits.lastTableIdx === (numHashTables - 1).U, 0.U, delayedRequest.last.bits.lastTableIdx + 1.U)
+	val evictTableForEntryFromStash = Mux(stash.io.matchingLastTableIdx === (numHashTables - 1).U, 0.U, stash.io.matchingLastTableIdx + 1.U)
 	val evictTable = Mux(isDelayedFromStash, evictTableForEntryFromStash, evictTableForFirstAttempt._1)
 	val evictOH = UIntToOH(evictTable)
-	stash.io.enq.bits.tag := Mux1H(evictOH, dataRead.map(x => x.tag))
-	stash.io.enq.bits.ldBufPtr := Mux1H(evictOH, dataRead.map(x => x.data.asTypeOf(MSHRLdBufType)))
-	stash.io.enq.bits.lastTableIdx := evictTable
-	stash.io.enq.valid := isDelayedAlloc & !hit & allFull & pipelineReady
-	evictCounterEnable := stash.io.enq.valid
+	stash.io.in.bits.tag          := Mux1H(evictOH, dataRead.map(x => x.tag))
+	stash.io.in.bits.sub          := Mux(stash.io.hit & ~isDelayedFromStash, updatedSubentryLine, Mux1H(evictOH, dataRead.map(x => x.data.asTypeOf(subentryLineType))))
+	stash.io.in.bits.lastTableIdx := evictTable
+	stash.io.in.valid             := (((isDelayedAlloc & !hit) | (isDelayedFromStash & stash.io.hit)) & allFull) | (isDelayedAlloc & ~isDelayedFromStash & stash.io.hit)
+	evictCounterEnable            := ((isDelayedAlloc & !hit) | (isDelayedFromStash & stash.io.hit)) & allFull & pipelineReady
 
 	/* Memory write port */
 	for (i <- 0 until numHashTables) {
-		memories(i).addra := storeToLoads(i).wrAddr
-		memories(i).wea := Mux(isDelayedFromStash,
-							delayedRequest.last.valid & Mux(allFull, evictOH(i), hashTableToUpdate(i)),
-							(isDelayedAlloc & !hit & Mux(allFull, evictOH(i), hashTableToUpdate(i))) | (isDelayedDealloc & hashTableMatches(i)))
-		storeToLoads(i).wrEn := memories(i).wea
-		memories(i).dina := updatedData.asUInt
-		// storeToLoads(i).dataOutToMem := updatedData
-		storeToLoads(i).dataOutToMem.valid    := updatedData.valid
-		storeToLoads(i).dataOutToMem.isMSHR   := updatedData.isMSHR
-		storeToLoads(i).dataOutToMem.tag      := updatedData.tag
-		storeToLoads(i).dataOutToMem.ldBufPtr := updatedData.data.asTypeOf(MSHRLdBufType)
+		memories(i).addra    := storeToLoad.wrAddrs(i)
+		memories(i).wea      := isDelayedValid & (mshrMatches(i) | ((!hit | isDelayedFromStash) & Mux(allFull, evictOH(i), hashTableToUpdate(i))))
+		memories(i).dina     := updatedData.asUInt
+		storeToLoad.wrEns(i) := memories(i).wea
 	}
-	io.frqIn.ready := isDelayedAlloc & !hit & pipelineReady & ~isDelayedFromStash
-	fakeRRArbiterForSelect.io.out.ready := io.frqIn.ready
+	storeToLoad.dataOutToMem := updatedData
+	val newAllocDone = isDelayedAlloc & !hit & ~isDelayedFromStash & pipelineReady
+	fakeRRArbiterForSelect.io.out.ready := newAllocDone
 
-	/* Another way to work around the cache line forwarding problem: stalling. The deallocation of an MSHR and the next request to the corresponding
-	   cache line must set a gap of two cycles to make the updated data visible to the request. Thus we can insert some stalls into the pipeline, or
-	   more specifically, the allocation part of the pipeline. So we can just reject the io.allocIn. */
-	val allocWaitToUpdateMatch1 = Wire(Bool())
-	val allocWaitToUpdateMatch2 = Wire(Bool())
-	allocWaitToUpdateMatch1 := (getTag(io.allocIn.bits.addr) === getTag(delayedRequest(0).bits.addr)) & ~delayedRequest(0).bits.isAlloc & delayedRequest(0).valid
-	allocWaitToUpdateMatch2 := (getTag(io.allocIn.bits.addr) === getTag(delayedRequest(1).bits.addr)) & ~delayedRequest(1).bits.isAlloc & delayedRequest(1).valid
-
-	// val allocatedMSHRCounter = Module(new SimultaneousUpDownSaturatingCounter(numMSHRTotal, 0))
-	// allocatedMSHRCounter.io.load := false.B
-	// allocatedMSHRCounter.io.loadValue := DontCare
-	// allocatedMSHRCounter.io.increment := io.frqIn.ready
-	// allocatedMSHRCounter.io.decrement := isDelayedDealloc & pipelineReady
-	val allocatedMSHRCounter = SimultaneousUpDownSaturatingCounter(numMSHRTotal,
-		increment=io.frqIn.ready,
-		decrement=isDelayedDealloc & pipelineReady)
+	val allocatedMSHRCounter = SimultaneousUpDownSaturatingCounter(numMSHRTotal, increment=newAllocDone, decrement=isDelayedDealloc & pipelineReady)
 	/* The number of allocations + kicked out entries in flight must be limited to the number of slots in the stash since, in the worst case,
 	* all of them will give rise to a kick out and must be stored in the stash if the pipeline gets filled with deallocations. */
 	// val allocsInFlight = Module(new SimultaneousUpDownSaturatingCounter(2* assocMemorySize, 0))
@@ -281,39 +247,30 @@ class InCacheMSHR(
 	- it can be put in the hash table without kicking out another entry (hit | ~allFull)
 	- an entry from the stash can be put in an hash table without more kickouts
 	- an allocation or a kicked out entry in flight is deallocated */
-	val allocsInFlight = SimultaneousUpDownSaturatingCounter(assocMemorySize+1,
+	val allocsInFlight = SimultaneousUpDownSaturatingCounter(
+		assocMemorySize + 1,
 		increment=inputArbiter.io.in(1).valid & inputArbiter.io.in(1).ready & pipelineReady,
-		decrement=(isDelayedAlloc & pipelineReady & (hit | ~allFull)) | (isDelayedDealloc & pipelineReady & (Vec(pipelineMatches).asUInt.orR | stash.io.matchingLdBufPtr.valid))
+		decrement=((isDelayedAlloc & (Vec(hashTableMatches).asUInt.orR | ~allFull)) | (((isDelayedAlloc & ~isDelayedFromStash) | isDelayedDealloc) & stash.io.hit)) & pipelineReady
 	)
-	// allocsInFlight.io.load := false.B
-	// allocsInFlight.io.loadValue := DontCare
-	// allocsInFlight.io.increment := inputArbiter.io.in(1).valid & inputArbiter.io.in(1).ready & pipelineReady
-	// allocsInFlight.io.decrement := (isDelayedAlloc & pipelineReady & (hit | ~allFull)) | (isDelayedDealloc & pipelineReady & (Vec(pipelineMatches).asUInt.orR | stash.io.matchingLdBufPtr.valid))
 	stallOnlyAllocs := allocsInFlight >= assocMemorySize.U
 	// val MSHRAlmostFull = allocatedMSHRCounter.io.currValue >= (io.maxAllowedMSHRs - MSHRAlmostFullMargin.U)
 	val MSHRAlmostFull = allocatedMSHRCounter >= (io.maxAllowedMSHRs - MSHRAlmostFullMargin.U)
 
-	stopAllocs := MSHRAlmostFull | io.stopAllocFromLdBuf | stallOnlyAllocs | allocWaitToUpdateMatch1 | allocWaitToUpdateMatch2
-	// stopAllocs := io.stopAllocFromLdBuf | stallOnlyAllocs
+	stopAllocs := MSHRAlmostFull | stallOnlyAllocs | subentryAlmostFullStall.stopAllocs
 	stopDeallocs := false.B
-
-	/* outLdBuf */
-	io.outLdBuf.bits.rowAddr := Mux(hit, selectedLdBufPtr, io.frqIn.bits)
-	io.outLdBuf.bits.entry.offset := getOffset(delayedRequest.last.bits.addr)
-	io.outLdBuf.bits.entry.id := delayedRequest.last.bits.id
-	io.outLdBuf.bits.data := delayedRequest.last.bits.data
-	io.outLdBuf.bits.opType.allocateRow := isDelayedAlloc & !hit & ~isDelayedFromStash
-	io.outLdBuf.bits.opType.allocateEntry := isDelayedAlloc
-	io.outLdBuf.valid := delayedRequest.last.valid & ~isDelayedFromStash & ~cacheHit
 
 	/* Queue and interface to external memory arbiter */
 	val externalMemoryQueue = Module(new BRAMQueue(tagWidth, numMSHRTotal))
 	externalMemoryQueue.io.deq <> io.outMem
-	externalMemoryQueue.io.enq.valid := io.frqIn.ready
+	externalMemoryQueue.io.enq.valid := newAllocDone
 	externalMemoryQueue.io.enq.bits := getTag(delayedRequest.last.bits.addr)
 
-	// pipelineReady := io.outLdBuf.ready | ~io.outLdBuf.valid | isDelayedFromStash
-	pipelineReady := MuxCase(true.B, Array(respOutEb.io.in.valid -> respOutEb.io.in.ready, io.outLdBuf.valid -> io.outLdBuf.ready)) | isDelayedFromStash
+	io.respGenOut.valid             := isDelayedDealloc & mshrHit
+	io.respGenOut.bits.data         := delayedRequest.last.bits.data
+	io.respGenOut.bits.entries      := selectedSubentryLine.entries
+	io.respGenOut.bits.lastValidIdx := selectedSubentryLine.lastValidIdx
+
+	pipelineReady := MuxCase(true.B, Array(respOutEb.io.in.valid -> respOutEb.io.in.ready, io.respGenOut.valid -> io.respGenOut.ready)) | isDelayedFromStash
 
 	/* Profiling interface */
 	if(Profiling.enable) {
@@ -325,15 +282,15 @@ class InCacheMSHR(
 		profilingRegisters += maxUsedMSHR
 		val collisionCount = ProfilingCounter(isDelayedAlloc & !hit & allFull & pipelineReady & ~isDelayedFromStash, io.axiProfiling)
 		profilingRegisters += collisionCount
-		val cyclesSpentResolvingCollisions = ProfilingCounter(isDelayedFromStash & delayedRequest.last.valid & pipelineReady, io.axiProfiling)
+		val cyclesSpentResolvingCollisions = ProfilingCounter(isDelayedFromStash & isDelayedValid & pipelineReady, io.axiProfiling)
 		profilingRegisters += cyclesSpentResolvingCollisions
 		val stallTriggerCount = ProfilingCounter(stallOnlyAllocs & ~RegNext(stallOnlyAllocs), io.axiProfiling)
 		profilingRegisters += stallTriggerCount
 		val cyclesSpentStalling = ProfilingCounter(stallOnlyAllocs & io.allocIn.valid, io.axiProfiling)
 		profilingRegisters += cyclesSpentStalling
-		val acceptedAllocsCount = ProfilingCounter(io.outLdBuf.bits.opType.allocateEntry & io.outLdBuf.valid & io.outLdBuf.ready, io.axiProfiling)
+		val acceptedAllocsCount = ProfilingCounter(isDelayedAlloc & pipelineReady, io.axiProfiling)
 		profilingRegisters += acceptedAllocsCount
-		val acceptedDeallocsCount = ProfilingCounter(~io.outLdBuf.bits.opType.allocateEntry & io.outLdBuf.valid & io.outLdBuf.ready, io.axiProfiling)
+		val acceptedDeallocsCount = ProfilingCounter(isDelayedDealloc & pipelineReady, io.axiProfiling)
 		profilingRegisters += acceptedDeallocsCount
 		val cyclesAllocsStalled = ProfilingCounter(io.allocIn.valid & ~io.allocIn.ready, io.axiProfiling)
 		profilingRegisters += cyclesAllocsStalled
@@ -343,12 +300,12 @@ class InCacheMSHR(
 		profilingRegisters += enqueuedMemReqsCount
 		// val dequeuedMemReqsCount = ProfilingCounter(externalMemoryQueue.io.deq.valid, io.axiProfiling)
 		// profilingRegisters += dequeuedMemReqsCount
-		val cyclesOutLdBufNotReady = ProfilingCounter(io.outLdBuf.valid & ~io.outLdBuf.ready, io.axiProfiling)
-		profilingRegisters += cyclesOutLdBufNotReady
+		// val cyclesOutLdBufNotReady = ProfilingCounter(io.outLdBuf.valid & ~io.outLdBuf.ready, io.axiProfiling)
+		// profilingRegisters += cyclesOutLdBufNotReady
 		// This is a very ugly hack to prevent sign extension when converting currValue to signed int, since asSInt does not accept a width as a parameter
 		val accumUsedMSHR = ProfilingArbitraryIncrementCounter(Array((true.B -> (allocatedMSHRCounter + 0.U((allocatedMSHRCounter.getWidth+1).W)).asSInt)), io.axiProfiling)
 		profilingRegisters += accumUsedMSHR._1
-		val cyclesStallAllocFromLdBuf = ProfilingCounter(io.allocIn.valid & io.stopAllocFromLdBuf, io.axiProfiling)
+		val cyclesStallAllocFromLdBuf = ProfilingCounter(io.allocIn.valid & subentryAlmostFullStall.stopAllocs, io.axiProfiling)
 		profilingRegisters += cyclesStallAllocFromLdBuf
 		// readLine.validCount, writeLine.validCount, wrEn
 		if(Profiling.enableHistograms) {
@@ -368,4 +325,90 @@ class InCacheMSHR(
 		io.axiProfiling.axi.RRESP := DontCare
 	}
 
+}
+
+/* Since subentries are also stored in cacheline, we need to update MSHR entries including those lying in the stash.
+   In the origin way, stash entries in pipeline also need to be updated, increasing complexity. In fact, we need to
+   guarantee that the in-flight allocs can not exceed the number of stash slots (see allocsInFlight). Thus, it's OK
+   to leave entries in the stash when re-inserting them into pipeline so that we can update them in spite of where
+   they exactly are (stash or pipeline).
+   By doing this, we can simplify the pipelne logic (removing redundant fields). But there is a tricky case where an
+   in-pipeline stash entry is being deallocated and we can not invalidate it. So a request from stash is only valid
+   when a matching entry is present in the stash.
+   */
+class InCacheMSHRStash(entryType: UniMSHREntryValid, numStashEntries: Int, lastTableIdxWidth: Int) extends Module {
+	val io = IO(new Bundle {
+		val in = Flipped(ValidIO(new StashEntryInIO(entryType, lastTableIdxWidth)))
+		val outToPipeline = DecoupledIO(entryType.tag.cloneType)
+		val pipelineReady = Input(Bool())
+		val lookupTag = Flipped(ValidIO(entryType.tag.cloneType))
+		val hit = Output(Bool())
+		val matchingSubentryLine = Output(entryType.sub.cloneType)
+		val matchingLastTableIdx = Output(UInt(lastTableIdxWidth.W))
+		val deallocMatchingEntry = Input(Bool())
+	})
+
+	val stashEntryType = new StashEntry(entryType, lastTableIdxWidth)
+	val invalidMemoryEntry = stashEntryType.getInvalidEntry()
+	val memory = RegInit(Vec(Seq.fill(numStashEntries)(invalidMemoryEntry)))
+
+	val emptyEntrySelect = PriorityEncoderOH(memory.map(x => ~x.valid))
+	val matches = memory.map(x => x.valid & (x.tag === io.lookupTag.bits) & io.lookupTag.valid)
+	val hit = Vec(matches).asUInt.orR
+	val outArbiter = Module(new ResettableRRArbiter(io.outToPipeline.bits.cloneType, numStashEntries))
+	for (i <- 0 until numStashEntries) {
+		when (io.pipelineReady) {
+			when (io.in.valid) { // writing (updating, adding, or replacing on an alloc from stash that causing an eviction)
+				when (matches(i) | (~hit & emptyEntrySelect(i))) { // updating or adding
+					memory(i).sub := io.in.bits.sub
+				}
+				when ((matches(i) & io.deallocMatchingEntry) | (~hit & emptyEntrySelect(i))) { // replacing or adding
+					memory(i).valid        := true.B
+					memory(i).inPipeline   := false.B
+					memory(i).tag          := io.in.bits.tag
+					memory(i).lastTableIdx := io.in.bits.lastTableIdx
+				}
+			} .elsewhen (matches(i) & io.deallocMatchingEntry) { // dealloc or alloc from stash written into BRAM
+				memory(i).valid := false.B
+			}
+			when (outArbiter.io.in(i).valid & outArbiter.io.in(i).ready) { // won't re-insert twice
+				memory(i).inPipeline := true.B
+			}
+		}
+		outArbiter.io.in(i).valid := memory(i).valid & ~memory(i).inPipeline & ~(matches(i) & io.deallocMatchingEntry)
+		outArbiter.io.in(i).bits  := memory(i).tag
+	}
+	outArbiter.io.out <> io.outToPipeline
+	io.matchingSubentryLine := Mux1H(matches, memory.map(x => x.sub))
+	io.matchingLastTableIdx := Mux1H(matches, memory.map(x => x.lastTableIdx))
+	io.hit := hit
+}
+
+/* Logic to raise stalls of allocs when any MSHR's subentry slots are getting full. By using cache line data field to store subentries,
+ * it may be rare to fill all the slots of an MSHR, thus we don't bother to optimize these cases but just stall. That is, when an MSHR whose
+ * empty slots are less than the pipeline length is being appended another subentry to, an alloc stall will raise. The rest allocs in the
+ * pipeline are also possible to cause this case (getting full). Thus, we keep tracking those MSHRs' tag, after all of them are deallocated
+ * can we accept allocs again. */
+class FullSubentryTagArray(tagWidth: Int, pipelineLength: Int) extends Module {
+	val io = IO(new Bundle {
+		val in = Flipped(ValidIO(UInt(tagWidth.W)))
+		val deallocMatchingTag = Input(Bool())
+		val pipelineReady = Input(Bool())
+		val stopAllocs = Output(Bool())
+	})
+
+	val valids = RegInit(Vec(Seq.fill(pipelineLength)(false.B)))
+	val tags = Reg(Vec(pipelineLength, UInt(tagWidth.W)))
+	val emptySelect = PriorityEncoderOH(valids.map(x => ~x))
+	for (i <- 0 until pipelineLength) {
+		when (io.pipelineReady & io.in.valid) {
+			when (~io.deallocMatchingTag & emptySelect(i)) {
+				valids(i) := true.B
+				tags(i)   := io.in.bits
+			} .elsewhen (io.deallocMatchingTag & io.in.bits === tags(i)) {
+				valids(i) := false.B
+			}
+		}
+	}
+	io.stopAllocs := (io.in.valid & ~io.deallocMatchingTag) | valids.asUInt.orR
 }

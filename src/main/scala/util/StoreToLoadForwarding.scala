@@ -35,6 +35,34 @@ class StoreToLoadForwardingTwoStages[T <: Data](gen: T = StoreToLoadForwarding.d
     io.dataInFixed := MuxCase(io.dataInFromMem, Array(takeOneLineAgo -> oneOutLineAgo, takeTwoLinesAgo -> twoOutLinesAgo))
 }
 
+/* With multiple BRAMs and only one pipeline, there is no need to perform forwarding for all of them. */
+class SharedStoreToLoadForwardingTwoStages[T <: Data](gen: T, addrWidth: Int, numMemBlocks: Int) extends Module {
+	val io = IO(new Bundle {
+		val rdAddrs = Vec(numMemBlocks, Input(UInt(addrWidth.W)))
+		val wrAddrs = Vec(numMemBlocks, Output(UInt(addrWidth.W)))
+		val wrEns = Vec(numMemBlocks, Input(Bool()))
+		val pipelineReady = Input(Bool())
+		val dataInFromMems = Vec(numMemBlocks, Input(gen))
+		val dataInFixeds = Vec(numMemBlocks, Output(gen))
+		val dataOutToMem = Input(gen)
+	})
+
+	val rdAddrs1CycAgo = Wire(Vec(numMemBlocks, UInt(addrWidth.W)))
+	val rdAddrs2CycAgo = Wire(Vec(numMemBlocks, UInt(addrWidth.W)))
+	val takes1CycAgo = Wire(Vec(numMemBlocks, Bool()))
+	val takes2CycAgo = Wire(Vec(numMemBlocks, Bool()))
+	val outData1CycAgo = RegEnable(io.dataOutToMem, enable=io.pipelineReady)
+	val outData2CycAgo = RegEnable(outData1CycAgo, enable=io.pipelineReady)
+	for (i <- 0 until numMemBlocks) {
+		rdAddrs1CycAgo(i)  := RegEnable(io.rdAddrs(i), enable=io.pipelineReady)
+		rdAddrs2CycAgo(i)  := RegEnable(rdAddrs1CycAgo(i), enable=io.pipelineReady)
+		io.wrAddrs(i)      := rdAddrs2CycAgo(i)
+		takes1CycAgo(i)    := RegEnable((rdAddrs2CycAgo(i) === rdAddrs1CycAgo(i)) & io.wrEns(i), false.B, enable=io.pipelineReady)
+		takes2CycAgo(i)    := RegEnable(RegEnable((rdAddrs2CycAgo(i) === io.rdAddrs(i)) & io.wrEns(i), false.B, enable=io.pipelineReady), false.B, enable=io.pipelineReady)
+		io.dataInFixeds(i) := MuxCase(io.dataInFromMems(i), Array(takes1CycAgo(i) -> outData1CycAgo, takes2CycAgo(i) -> outData2CycAgo))
+	}
+}
+
 class StoreToLoadForwardingThreeStages[T <: Data](gen: T = StoreToLoadForwarding.defaultType, addrWidth: Int = StoreToLoadForwarding.defaultAddrWidth) extends Module {
     /* Note: fixed depth of three slots (BRAM latency + 1) but data expected after two cycles */
     val io = IO(new Bundle {

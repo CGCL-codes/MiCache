@@ -21,12 +21,13 @@ trait HasLastValidIdx extends Bundle {
   val lastValidIdx = UInt(lastValidIdxWidth.W)
 }
 
-trait HasLastTableIdx extends ModularBundle {
+// trait HasLastTableIdx extends ModularBundle {
+trait HasLastTableIdx extends Bundle {
   val lastTableIdxWidth: Int
   val lastTableIdx = UInt(lastTableIdxWidth.W)
-  registerConnectionFunction((that: Bundle) =>
-    this.lastTableIdx := {if(that.isInstanceOf[HasLastTableIdx]) that.asInstanceOf[HasLastTableIdx].lastTableIdx else DontCare}
-  )
+  // registerConnectionFunction((that: Bundle) =>
+  //   this.lastTableIdx := {if(that.isInstanceOf[HasLastTableIdx]) that.asInstanceOf[HasLastTableIdx].lastTableIdx else DontCare}
+  // )
 }
 
 class MSHREntry(val tagWidth: Int, val ldBufPtrWidth: Int) extends ModularBundle with HasTag {
