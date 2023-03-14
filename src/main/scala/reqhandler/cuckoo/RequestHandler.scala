@@ -83,7 +83,7 @@ class RequestHandlerCuckoo(reqAddrWidth: Int=RequestHandler.reqAddrWidth, reqDat
   // mshrAlmostFullMargin can now be redefined at runtime via axiProfiling interface
   // val mshrAlmostFullMargin = (totalNumMSHR * RequestHandler.mshrAlmostFullRelMargin).toInt
   // val mshrManager = Module(new CuckooMSHR(reqAddrWidth, numMSHRPerHashTable, numHashTables,reqIdWidth, memDataWidth, reqDataWidth, subentriesAddrWidth, 0, mshrAssocMemorySize, sameHashFunction))
-  val mshrManager = Module(new InCacheMSHR(reqAddrWidth, numMSHRPerHashTable, numHashTables,reqIdWidth, memDataWidth, reqDataWidth, subentriesAddrWidth, 0, mshrAssocMemorySize, sameHashFunction))
+  val mshrManager = Module(new InCacheMSHR(reqAddrWidth, numMSHRPerHashTable, numHashTables,reqIdWidth, memDataWidth, reqDataWidth, numSubentriesPerRow, 0, mshrAssocMemorySize, sameHashFunction))
 
   // mshrManager.io.allocIn <> cache.io.outMisses
   // mshrManager.io.allocIn.bits.addr := Cat(cache.io.outMisses.bits.addr(reqAddrWidth-1, offsetWidth), cache.io.outMisses.bits.addr(offsetWidth-1, 0))

@@ -17,14 +17,13 @@ class InCacheMSHR(
 	idWidth:              Int=MSHR.idWidth,
 	memDataWidth:         Int=MSHR.memDataWidth,
 	reqDataWidth:         Int=MSHR.reqDataWidth,
-	ldBufRowAddrWidth:    Int=MSHR.ldBufRowAddrWidth,
+	numSubentriesPerRow:  Int=0,
 	MSHRAlmostFullMargin: Int=MSHR.MSHRAlmostFullMargin,
 	assocMemorySize:      Int=MSHR.assocMemorySize,
 	sameHashFunction:     Boolean=false
 ) extends Module {
 	require(isPow2(memDataWidth / reqDataWidth))
 	require(isPow2(numMSHRPerHashTable))
-	require(memDataWidth >= ldBufRowAddrWidth)
 	val offsetWidth = log2Ceil(memDataWidth / reqDataWidth)
 	val tagWidth = addrWidth - offsetWidth
 	val numMSHRTotal = numMSHRPerHashTable * numHashTables
@@ -32,7 +31,7 @@ class InCacheMSHR(
 	val memType = new UniCacheLineValid(tagWidth, memDataWidth)
 	val memWidth = memType.getWidth
 	val cacheDataType = memType.data.cloneType
-	val mshrType = new UniMSHREntryValid(tagWidth, memDataWidth, offsetWidth, idWidth)
+	val mshrType = new UniMSHREntryValid(tagWidth, memDataWidth, offsetWidth, idWidth, numSubentriesPerRow)
 	val subentryLineType = mshrType.sub.cloneType
 	val numEntriesPerLine = mshrType.sub.entriesPerLine
 
@@ -139,7 +138,8 @@ class InCacheMSHR(
 	/* Memories instantiation and interconnection */
 	/* Memories are initialized with all zeros, which is fine for us since all the valids will be false */
 	val memories = Array.fill(numHashTables)(Module(new XilinxSimpleDualPortNoChangeBRAM(width=memWidth, depth=numMSHRPerHashTable)).io)
-	val storeToLoad = Module(new SharedStoreToLoadForwardingTwoStages(memType, hashTableAddrWidth, numHashTables)).io
+	// val storeToLoad = Module(new SharedStoreToLoadForwardingTwoStages(memType, hashTableAddrWidth, numHashTables)).io
+	val storeToLoads = Array.fill(numHashTables)(Module(new StoreToLoadForwardingTwoStages(memType, hashTableAddrWidth)).io)
 	for (i <- 0 until numHashTables) {
 		memories(i).clock := clock
 		memories(i).reset := reset
@@ -147,13 +147,16 @@ class InCacheMSHR(
 		memories(i).addrb             := rdAddri
 		memories(i).enb               := pipelineReady
 		memories(i).regceb            := pipelineReady
-		storeToLoad.rdAddrs(i)        := rdAddri
-		storeToLoad.dataInFromMems(i) := memories(i).doutb.asTypeOf(memType)
+		// storeToLoad.rdAddrs(i)        := rdAddri
+		// storeToLoad.dataInFromMems(i) := memories(i).doutb.asTypeOf(memType)
+		storeToLoads(i).rdAddr        := rdAddri
+		storeToLoads(i).dataInFromMem := memories(i).doutb.asTypeOf(memType)
+		storeToLoads(i).pipelineReady := pipelineReady
 	}
-	storeToLoad.pipelineReady := pipelineReady
+	// storeToLoad.pipelineReady := pipelineReady
 
 	/* Matching logic */
-	val dataRead = storeToLoad.dataInFixeds
+	val dataRead = storeToLoads.map(x => x.dataInFixed)
 	val hashTableMatches = dataRead.map(x => x.valid & x.tag === getTag(delayedRequest.last.bits.addr))
 	stash.io.lookupTag.bits       := getTag(delayedRequest.last.bits.addr)
 	stash.io.lookupTag.valid      := delayedRequest.last.valid
@@ -230,12 +233,15 @@ class InCacheMSHR(
 
 	/* Memory write port */
 	for (i <- 0 until numHashTables) {
-		memories(i).addra    := storeToLoad.wrAddrs(i)
+		// memories(i).addra    := storeToLoad.wrAddrs(i)
+		memories(i).addra    := storeToLoads(i).wrAddr
 		memories(i).wea      := isDelayedValid & (mshrMatches(i) | ((!hit | isDelayedFromStash) & Mux(allFull, evictOH(i), hashTableToUpdate(i))))
 		memories(i).dina     := updatedData.asUInt
-		storeToLoad.wrEns(i) := memories(i).wea
+		// storeToLoad.wrEns(i) := memories(i).wea
+		storeToLoads(i).wrEn := memories(i).wea
+		storeToLoads(i).dataOutToMem := updatedData
 	}
-	storeToLoad.dataOutToMem := updatedData
+	// storeToLoad.dataOutToMem := updatedData
 	val newAllocDone = isDelayedAlloc & !hit & ~isDelayedFromStash & pipelineReady
 	fakeRRArbiterForSelect.io.out.ready := newAllocDone
 
@@ -280,6 +286,8 @@ class InCacheMSHR(
 		profilingRegisters += currentlyUsedMSHR
 		val maxUsedMSHR = ProfilingMax(allocatedMSHRCounter, io.axiProfiling)
 		profilingRegisters += maxUsedMSHR
+		val maxUsedSubentry = ProfilingMax(Mux(updatedData.isMSHR, updatedSubentryLine.lastValidIdx, 0.U), io.axiProfiling)
+		profilingRegisters += maxUsedSubentry
 		val collisionCount = ProfilingCounter(isDelayedAlloc & !hit & allFull & pipelineReady & ~isDelayedFromStash, io.axiProfiling)
 		profilingRegisters += collisionCount
 		val cyclesSpentResolvingCollisions = ProfilingCounter(isDelayedFromStash & isDelayedValid & pipelineReady, io.axiProfiling)
@@ -358,7 +366,7 @@ class InCacheMSHRStash(entryType: UniMSHREntryValid, numStashEntries: Int, lastT
 	val outArbiter = Module(new ResettableRRArbiter(io.outToPipeline.bits.cloneType, numStashEntries))
 	for (i <- 0 until numStashEntries) {
 		when (io.pipelineReady) {
-			when (io.in.valid) { // writing (updating, adding, or replacing on an alloc from stash that causing an eviction)
+			when (io.in.valid) { // writing (updating, adding, or replacing on an alloc from stash that causes an eviction)
 				when (matches(i) | (~hit & emptyEntrySelect(i))) { // updating or adding
 					memory(i).sub := io.in.bits.sub
 				}

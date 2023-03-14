@@ -265,7 +265,8 @@ class ProfilingMax(width: Int) extends Module {
     when(io.clear) {
       max := 0.U
     } .elsewhen(RegNext(io.in) > max) {
-      max := io.in
+      // max := io.in
+      max := RegNext(io.in)
     }
     io.snapshotValue := RegEnable(max, init=0.U, enable=io.snapshot)
 }

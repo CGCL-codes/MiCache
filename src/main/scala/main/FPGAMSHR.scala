@@ -102,7 +102,7 @@ _mlx_unibk${FPGAMSHR.numReqHandlers}
 _ht${FPGAMSHR.numHashTables}
 _mshr${FPGAMSHR.numMSHRPerHashTable}
 _st${if(FPGAMSHR.numHashTables > 0) FPGAMSHR.mshrAssocMemorySize else 0}
-_se${FPGAMSHR.calSubentryPerLine()}
+_se${if(FPGAMSHR.numSubentriesPerRow == 0) FPGAMSHR.calSubentryPerLine() else FPGAMSHR.numSubentriesPerRow}
 ${if (FPGAMSHR.sameHashFunction) "_nocuckoo" else ""}
 _cw${if((FPGAMSHR.cacheSizeBytes > 0) && (FPGAMSHR.numCacheWays > 0)) FPGAMSHR.numCacheWays else 0}
 _csz${if((FPGAMSHR.cacheSizeBytes > 0) && (FPGAMSHR.numCacheWays > 0)) FPGAMSHR.cacheSizeBytes else 0}

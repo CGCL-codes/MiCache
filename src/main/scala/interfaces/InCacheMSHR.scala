@@ -21,29 +21,30 @@ class Subentry(offsetWidth: Int, idWidth: Int) extends Bundle {
 }
 
 // Subentries are stored in the data field of a cache line, so lineWidth is cache data width.
-class SubentryLine(lineWidth: Int, offsetWidth: Int, idWidth: Int) extends Bundle {
+class SubentryLine(lineWidth: Int, offsetWidth: Int, idWidth: Int, numSubentriesPerLine: Int) extends Bundle {
 	val max = lineWidth / (offsetWidth + idWidth)
-	val maxIdxWidth = log2Ceil(max)
 	val exceeded = max * (offsetWidth + idWidth) + log2Ceil(max) > lineWidth
-	// println(s"max entry count=${max}, max index width=${maxIdxWidth}, lineWidth=${lineWidth}, offsetWidth=${offsetWidth}, idWidth=${idWidth}")
-	val lastValidIdxWidth = if (exceeded) log2Ceil(max - 1) else maxIdxWidth
-	val entriesPerLine = if (exceeded) max - 1 else max
-	
+	val maxEntriesPerLine = if (exceeded) max - 1 else max
+	require(numSubentriesPerLine <= maxEntriesPerLine)
+
+	val entriesPerLine = if (numSubentriesPerLine == 0) maxEntriesPerLine else numSubentriesPerLine
+	val lastValidIdxWidth = log2Ceil(entriesPerLine)
+
 	val lastValidIdx = UInt(lastValidIdxWidth.W)
 	val entries = Vec(entriesPerLine, new Subentry(offsetWidth, idWidth))
 
-	override def cloneType = (new SubentryLine(lineWidth, offsetWidth, idWidth)).asInstanceOf[this.type]
+	override def cloneType = (new SubentryLine(lineWidth, offsetWidth, idWidth, numSubentriesPerLine)).asInstanceOf[this.type]
 }
 
-class UniMSHREntry(val tagWidth: Int, lineWidth: Int, offsetWidth: Int, idWidth: Int) extends Bundle with HasIsMSHR with HasTag {
-	val sub = new SubentryLine(lineWidth, offsetWidth, idWidth)
-	override def cloneType = (new UniMSHREntry(tagWidth, lineWidth, offsetWidth, idWidth)).asInstanceOf[this.type]
+class UniMSHREntry(val tagWidth: Int, lineWidth: Int, offsetWidth: Int, idWidth: Int, numSubentriesPerLine: Int) extends Bundle with HasIsMSHR with HasTag {
+	val sub = new SubentryLine(lineWidth, offsetWidth, idWidth, numSubentriesPerLine)
+	override def cloneType = (new UniMSHREntry(tagWidth, lineWidth, offsetWidth, idWidth, numSubentriesPerLine: Int)).asInstanceOf[this.type]
 }
 
-class UniMSHREntryValid(val tagWidth: Int, lineWidth: Int, offsetWidth: Int, idWidth: Int)
+class UniMSHREntryValid(val tagWidth: Int, lineWidth: Int, offsetWidth: Int, idWidth: Int, numSubentriesPerLine: Int)
 extends Bundle with HasValid with HasIsMSHR with HasTag {
-	val sub = new SubentryLine(lineWidth, offsetWidth, idWidth)
-	override def cloneType = (new UniMSHREntryValid(tagWidth, lineWidth, offsetWidth, idWidth)).asInstanceOf[this.type]
+	val sub = new SubentryLine(lineWidth, offsetWidth, idWidth, numSubentriesPerLine)
+	override def cloneType = (new UniMSHREntryValid(tagWidth, lineWidth, offsetWidth, idWidth, numSubentriesPerLine)).asInstanceOf[this.type]
 }
 
 class StashEntryInIO(mshrGen: UniMSHREntryValid, val lastTableIdxWidth: Int) extends {
@@ -71,6 +72,6 @@ class StashEntry(mshrGen: UniMSHREntryValid, val lastTableIdxWidth: Int) extends
 }
 
 class UniRespGenIO(val dataWidth: Int, offsetWidth: Int, idWidth: Int, entriesPerLine: Int)
-extends SubentryLine((offsetWidth + idWidth) * entriesPerLine + log2Ceil(entriesPerLine), offsetWidth, idWidth) with HasData {
+extends SubentryLine((offsetWidth + idWidth) * entriesPerLine + log2Ceil(entriesPerLine), offsetWidth, idWidth, entriesPerLine) with HasData {
 	override def cloneType = (new UniRespGenIO(dataWidth, offsetWidth, idWidth, entriesPerLine)).asInstanceOf[this.type]
 }
