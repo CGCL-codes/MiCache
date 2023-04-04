@@ -99,6 +99,7 @@ numMemoryPorts=${numMemoryPorts}
 _id${FPGAMSHR.reqIdWidth}
 _in${FPGAMSHR.numInputs}
 _mlx_unibk${FPGAMSHR.numReqHandlers}
+_stg
 _ht${FPGAMSHR.numHashTables}
 _mshr${FPGAMSHR.numMSHRPerHashTable}
 _st${if(FPGAMSHR.numHashTables > 0) FPGAMSHR.mshrAssocMemorySize else 0}
@@ -111,14 +112,16 @@ _xpc${FPGAMSHR.numMemoryPorts}""".replace("\n", "") + (if(FPGAMSHR.useROB) "_rob
 	def calSubentryPerLine(): Int = {
 		val idWidth = FPGAMSHR.reqIdWidth + log2Ceil(FPGAMSHR.numInputs)
 		val offsetWidth = log2Ceil(FPGAMSHR.memDataWidth / FPGAMSHR.reqDataWidth)
-		val max = FPGAMSHR.memDataWidth / (offsetWidth + idWidth)
+		val aligned = roundUp(offsetWidth + idWidth, 8)
+		val max = FPGAMSHR.memDataWidth / aligned
 		val maxIdxWidth = log2Ceil(max)
-		val exceeded = max * (offsetWidth + idWidth) + log2Ceil(max) > FPGAMSHR.memDataWidth
+		val exceeded = max * (offsetWidth + idWidth) + roundUp(maxIdxWidth, 8) > FPGAMSHR.memDataWidth
 		println(s"max entry count=${max}, max index width=${maxIdxWidth}, lineWidth=${FPGAMSHR.memDataWidth}, offsetWidth=${offsetWidth}, idWidth=${idWidth}")
-		val lastValidIdxWidth = if (exceeded) log2Ceil(max - 1) else maxIdxWidth
 		val entriesPerLine = if (exceeded) max - 1 else max
 		entriesPerLine
 	}
+
+	def roundUp(a: Int, alignment: Int) = a + (alignment - a % alignment) % alignment
 
 	var reqAddrWidth = 0
 	var memAddrWidth = 0

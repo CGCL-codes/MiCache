@@ -35,6 +35,32 @@ class XilinxSimpleDualPortNoChangeBRAM(width: Int,
     setResource("/XilinxSimpleDualPortNoChangeBRAM.v")
 }
 
+class XilinxTrueDualPort1RdWr1RdBRAM(width: Int, depth: Int, byteWriteWidth: Int=0, initFile: String="")
+extends BlackBox(Map(
+    "RAM_WIDTH" -> width,
+    "RAM_DEPTH" -> depth,
+    "BYTE_WIDTH" -> (if (byteWriteWidth == 0) width else byteWriteWidth),
+    "INIT_FILE" -> initFile
+)) with HasBlackBoxResource {
+    val addrWidth = log2Ceil(depth)
+    val io = IO(new Bundle{
+        val clock  = Input(Clock())
+        val reset  = Input(Bool())
+        val addra  = Input(UInt(addrWidth.W))
+        val addrb  = Input(UInt(addrWidth.W))
+        val dina   = Input(UInt(width.W))
+        val wea    = Input(UInt((if (byteWriteWidth == 0) 1 else width/byteWriteWidth).W))
+        val ena    = Input(Bool())
+        val enb    = Input(Bool())
+        val regcea = Input(Bool())
+        val regceb = Input(Bool())
+        val douta  = Output(UInt(width.W))
+        val doutb  = Output(UInt(width.W))
+    })
+
+    setResource("/XilinxTrueDualPort1RdWr1RdBRAM.v")
+}
+
 /* Default values for testing */
 object AXIBRAMInterface {
     val addrWidth = 8
