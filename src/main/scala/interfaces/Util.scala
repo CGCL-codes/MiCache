@@ -38,6 +38,12 @@ class AddrDataIdAllocIO(val addrWidth: Int, val dataWidth: Int, val idWidth: Int
   override def cloneType = (new AddrDataIdAllocIO(addrWidth, dataWidth, idWidth)).asInstanceOf[this.type]
 }
 
+class AddrIdAllocIO(val addrWidth: Int, val idWidth: Int)
+  extends Bundle with HasAddr with HasID {
+  val isAlloc = Bool()
+  override def cloneType = (new AddrIdAllocIO(addrWidth, idWidth)).asInstanceOf[this.type]
+}
+
 class DataStrobeIO(val dataWidth: Int) extends {
   val strbWidth = dataWidth / 8
 } with Bundle with HasData with HasStrb {

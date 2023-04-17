@@ -2,7 +2,7 @@
  * the other is read first with no cycles delay for both reads and writes.
  */
 
-module XilinxTrueDualPort1RdWr1RdBRAM #(
+module XilinxTDPReadFirstByteWriteBRAM #(
 	parameter RAM_WIDTH = 18,               // Specify RAM data width
 	parameter RAM_DEPTH = 1024,             // Specify RAM depth (number of entries)
 	parameter BYTE_WIDTH = RAM_WIDTH,
@@ -11,10 +11,10 @@ module XilinxTrueDualPort1RdWr1RdBRAM #(
 	input [clogb2(RAM_DEPTH-1)-1:0] addra,  // Port A address bus, width determined from RAM_DEPTH
 	input [clogb2(RAM_DEPTH-1)-1:0] addrb,  // Port B address bus, width determined from RAM_DEPTH
 	input [RAM_WIDTH-1:0] dina,             // Port A RAM input data
-	// input [RAM_WIDTH-1:0] dinb,             // Port B RAM input data
+	input [RAM_WIDTH-1:0] dinb,             // Port B RAM input data
 	input clock,                            // Clock
 	input [(RAM_WIDTH/BYTE_WIDTH)-1:0] wea, // Port A write enable
-	// input [(RAM_WIDTH/BYTE_WIDTH)-1:0] web, // Port B write enable
+	input [(RAM_WIDTH/BYTE_WIDTH)-1:0] web, // Port B write enable
 	input ena,                              // Port A RAM Enable, for additional power savings, disable port when not in use
 	input enb,                              // Port B RAM Enable, for additional power savings, disable port when not in use
 	input reset,                            // Port A and B output reset (does not affect memory contents)
@@ -68,14 +68,14 @@ module XilinxTrueDualPort1RdWr1RdBRAM #(
 	end
 
 	// port B
-	// for (genvar i=0; i<RAM_WIDTH/BYTE_WIDTH; i=i+1) begin
-	// 	always @(posedge clock) begin
-	// 		if (enb) begin
-	// 			if (web[i])
-	// 				bram[addrb][(i+1)*BYTE_WIDTH-1:i*BYTE_WIDTH] <= dinb[(i+1)*BYTE_WIDTH-1:i*BYTE_WIDTH];
-	// 		end
-	// 	end
-	// end
+	for (genvar i=0; i<RAM_WIDTH/BYTE_WIDTH; i=i+1) begin
+		always @(posedge clock) begin
+			if (enb) begin
+				if (web[i])
+					bram[addrb][(i+1)*BYTE_WIDTH-1:i*BYTE_WIDTH] <= dinb[(i+1)*BYTE_WIDTH-1:i*BYTE_WIDTH];
+			end
+		end
+	end
 
 	always @(posedge clock) begin
 		if (enb) begin

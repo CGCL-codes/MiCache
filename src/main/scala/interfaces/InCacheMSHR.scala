@@ -14,8 +14,9 @@ import scala.language.reflectiveCalls
 // 	override def cloneType = (new UniCacheLineValid(tagWidth, dataWidth)).asInstanceOf[this.type]
 // }
 
-class UniTag(val tagWidth: Int) extends Bundle with HasValid with HasIsMSHR with HasTag {
-	override def cloneType = (new UniTag(tagWidth)).asInstanceOf[this.type]
+class UniTag(val tagWidth: Int, val lastValidIdxWidth: Int) extends Bundle with HasValid with HasIsMSHR with HasTag {
+	val lastValidIdx = UInt(lastValidIdxWidth.W)
+	override def cloneType = (new UniTag(tagWidth, lastValidIdxWidth)).asInstanceOf[this.type]
 }
 
 class Subentry(offsetWidth: Int, idWidth: Int) extends Bundle {
@@ -33,33 +34,35 @@ class SubentryWithPadding(offsetWidth: Int, idWidth: Int, paddingWidth: Int) ext
 // Add padding for BRAM byte write enble.
 class SubentryLine(lineWidth: Int, val offsetWidth: Int, val idWidth: Int, numSubentriesPerLine: Int, alignWidth: Int=8) extends Bundle {
 	val entryBits = roundUp(offsetWidth + idWidth, alignWidth)
-	val max = lineWidth / entryBits
-	val exceeded = max * entryBits + roundUp(log2Ceil(max), alignWidth) > lineWidth
-	val maxEntriesPerLine = if (exceeded) max - 1 else max
+	val maxEntriesPerLine = lineWidth / entryBits
 	require(numSubentriesPerLine <= maxEntriesPerLine)
 	val entriesPerLine = if (numSubentriesPerLine == 0) maxEntriesPerLine else numSubentriesPerLine
 	val lastValidIdxWidth = log2Ceil(entriesPerLine)
-	val lastValidIdxBits = roundUp(lastValidIdxWidth, alignWidth)
-	val lastValidIdxBytes = lastValidIdxBits / alignWidth
 	val entryBytes = entryBits / alignWidth
 
-	val lastValidIdx = UInt(lastValidIdxWidth.W)
-	val padding = UInt((lastValidIdxBits - lastValidIdxWidth).W)
 	val entries = Vec(entriesPerLine, new SubentryWithPadding(offsetWidth, idWidth, entryBits - (offsetWidth + idWidth)))
 
 	def roundUp(a: Int, alignment: Int) = a + (alignment - a % alignment) % alignment
+	def withNoPadding(): SubentryLineWithNoPadding = {
+		val out = Wire(new SubentryLineWithNoPadding(offsetWidth, idWidth, entriesPerLine))
+		out.entries.zip(this.entries).map(x => {
+			x._1.offset  := x._2.offset
+			x._1.id      := x._2.id
+		})
+		out
+	}
 	override def cloneType = (new SubentryLine(lineWidth, offsetWidth, idWidth, numSubentriesPerLine, alignWidth)).asInstanceOf[this.type]
 }
 
 class SubentryLineWithNoPadding(val offsetWidth: Int, val idWidth: Int, val entriesPerLine: Int) extends Bundle {
-	val lastValidIdxWidth = log2Ceil(entriesPerLine)
-	val lastValidIdx = UInt(lastValidIdxWidth.W)
+	// val lastValidIdxWidth = log2Ceil(entriesPerLine)
+	// val lastValidIdx = UInt(lastValidIdxWidth.W)
 	val entries = Vec(entriesPerLine, new Subentry(offsetWidth, idWidth))
 	override def cloneType = (new SubentryLineWithNoPadding(offsetWidth, idWidth, entriesPerLine)).asInstanceOf[this.type]
 	def withPadding(gen: SubentryLine): SubentryLine = {
 		val out = Wire(gen.cloneType)
-		out.lastValidIdx := this.lastValidIdx
-		out.padding      := DontCare
+		// out.lastValidIdx := this.lastValidIdx
+		// out.padding      := DontCare
 		out.entries.zip(this.entries).map(x => {
 			x._1.offset  := x._2.offset
 			x._1.id      := x._2.id
@@ -80,35 +83,36 @@ class SubentryLineWithNoPadding(val offsetWidth: Int, val idWidth: Int, val entr
 // 	override def cloneType = (new UniMSHREntryValid(tagWidth, lineWidth, offsetWidth, idWidth, numSubentriesPerLine)).asInstanceOf[this.type]
 // }
 
-class UniForwarding(tagWidth: Int, lastValidIdxWidth: Int) extends UniTag(tagWidth) {
-	val lastValidIdx = UInt(lastValidIdxWidth.W)
-	override def cloneType = (new UniForwarding(tagWidth, lastValidIdxWidth)).asInstanceOf[this.type]
-}
+// class UniForwarding(tagWidth: Int, lastValidIdxWidth: Int) extends UniTag(tagWidth) {
+// 	val lastValidIdx = UInt(lastValidIdxWidth.W)
+// 	override def cloneType = (new UniForwarding(tagWidth, lastValidIdxWidth)).asInstanceOf[this.type]
+// }
 
 class StashVictimInIO(val tagWidth: Int, val lastValidIdxWidth: Int, val lastTableIdxWidth: Int) extends Bundle with HasTag with HasLastTableIdx {
 	val lastValidIdx = UInt(lastValidIdxWidth.W)
 	override def cloneType = (new StashVictimInIO(tagWidth, lastValidIdxWidth, lastTableIdxWidth)).asInstanceOf[this.type]
 }
 
-class StashNewSubentryIO(subGen: Subentry, lastValidIdxWidth: Int) extends Bundle {
-	val entry = subGen.cloneType
-	val lastValidIdx = UInt(lastValidIdxWidth.W)
-	override def cloneType = (new StashNewSubentryIO(subGen, lastValidIdxWidth)).asInstanceOf[this.type]
-}
+// class StashNewSubentryIO(subGen: Subentry, lastValidIdxWidth: Int) extends Bundle {
+// 	val entry = subGen.cloneType
+// 	val lastValidIdx = UInt(lastValidIdxWidth.W)
+// 	override def cloneType = (new StashNewSubentryIO(subGen, lastValidIdxWidth)).asInstanceOf[this.type]
+// }
 
-class StashEntry(val tagWidth: Int, subGen: SubentryLine, val lastTableIdxWidth: Int)
+class StashEntry(val tagWidth: Int, val lastValidIdxWidth: Int, val lastTableIdxWidth: Int)
 extends Bundle with HasValid with HasTag with HasLastTableIdx {
 	val inPipeline = Bool()
 	val subTransit = Bool()
-	val sub = new SubentryLineWithNoPadding(subGen.offsetWidth, subGen.idWidth, subGen.entriesPerLine)
-	override def cloneType = (new StashEntry(tagWidth, subGen, lastTableIdxWidth)).asInstanceOf[this.type]
+	val lastValidIdx = UInt(lastValidIdxWidth.W)
+	// val sub = new SubentryLineWithNoPadding(subGen.offsetWidth, subGen.idWidth, subGen.entriesPerLine)
+	override def cloneType = (new StashEntry(tagWidth, lastValidIdxWidth, lastTableIdxWidth)).asInstanceOf[this.type]
 	def getInvalidEntry() = {
 		val m = Wire(this)
 		m.valid := false.B
 		m.inPipeline := DontCare
 		m.subTransit := DontCare
 		m.tag := DontCare
-		m.sub := DontCare
+		m.lastValidIdx := DontCare
 		m.lastTableIdx := DontCare
 		m
 	}
@@ -116,5 +120,22 @@ extends Bundle with HasValid with HasTag with HasLastTableIdx {
 
 class UniRespGenIO(val dataWidth: Int, offsetWidth: Int, idWidth: Int, entriesPerLine: Int)
 extends SubentryLineWithNoPadding(offsetWidth, idWidth, entriesPerLine) with HasData {
+	val lastValidIdxWidth = log2Ceil(entriesPerLine)
+	val lastValidIdx = UInt(lastValidIdxWidth.W)
 	override def cloneType = (new UniRespGenIO(dataWidth, offsetWidth, idWidth, entriesPerLine)).asInstanceOf[this.type]
+}
+
+class PipelineIO(val addrWidth: Int, val idWidth: Int) extends Bundle with HasValid with HasAddr with HasID {
+	val isAlloc = Bool()
+	val isFromStash = Bool()
+	override def cloneType = (new PipelineIO(addrWidth, idWidth)).asInstanceOf[this.type]
+	def getInvalid() = {
+		val m = Wire(this)
+		m.valid := false.B
+		m.addr := DontCare
+		m.id := DontCare
+		m.isAlloc := DontCare
+		m.isFromStash := DontCare
+		m
+	}
 }

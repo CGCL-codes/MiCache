@@ -35,7 +35,7 @@ class XilinxSimpleDualPortNoChangeBRAM(width: Int,
     setResource("/XilinxSimpleDualPortNoChangeBRAM.v")
 }
 
-class XilinxTrueDualPort1RdWr1RdBRAM(width: Int, depth: Int, byteWriteWidth: Int=0, initFile: String="")
+class XilinxTDPReadFirstByteWriteBRAM(width: Int, depth: Int, byteWriteWidth: Int=0, initFile: String="")
 extends BlackBox(Map(
     "RAM_WIDTH" -> width,
     "RAM_DEPTH" -> depth,
@@ -49,7 +49,9 @@ extends BlackBox(Map(
         val addra  = Input(UInt(addrWidth.W))
         val addrb  = Input(UInt(addrWidth.W))
         val dina   = Input(UInt(width.W))
+        val dinb   = Input(UInt(width.W))
         val wea    = Input(UInt((if (byteWriteWidth == 0) 1 else width/byteWriteWidth).W))
+        val web    = Input(UInt((if (byteWriteWidth == 0) 1 else width/byteWriteWidth).W))
         val ena    = Input(Bool())
         val enb    = Input(Bool())
         val regcea = Input(Bool())
@@ -58,7 +60,7 @@ extends BlackBox(Map(
         val doutb  = Output(UInt(width.W))
     })
 
-    setResource("/XilinxTrueDualPort1RdWr1RdBRAM.v")
+    setResource("/XilinxTDPReadFirstByteWriteBRAM.v")
 }
 
 /* Default values for testing */

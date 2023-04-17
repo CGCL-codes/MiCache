@@ -70,7 +70,6 @@ class StoreToLoadForwardingThreeStages[T <: Data](gen: T = StoreToLoadForwarding
         val wrAddr = Output(UInt(addrWidth.W))
         val wrEn = Input(Bool())
         val pipelineReady = Input(Bool())
-        val wrPipelineReady = Input(Bool())
         val dataInFromMem = Input(gen)
         val dataInFixed = Output(gen)
         val dataOutToMem = Input(gen)
@@ -82,10 +81,10 @@ class StoreToLoadForwardingThreeStages[T <: Data](gen: T = StoreToLoadForwarding
      * of the BRAM LevelComparator */
     val oneRdAddrAgo = RegEnable(io.rdAddr, enable=io.pipelineReady)
     val twoRdAddrAgo = RegEnable(oneRdAddrAgo, enable=io.pipelineReady)
-    val threeRdAddrAgo = RegEnable(twoRdAddrAgo, enable=io.wrPipelineReady)
+    val threeRdAddrAgo = RegEnable(twoRdAddrAgo, enable=io.pipelineReady)
     io.wrAddr := threeRdAddrAgo
-    val oneOutLineAgo = RegEnable(io.dataOutToMem, enable=io.wrPipelineReady)
-    val twoOutLinesAgo = RegEnable(oneOutLineAgo, enable=io.wrPipelineReady)
+    val oneOutLineAgo = RegEnable(io.dataOutToMem, enable=io.pipelineReady)
+    val twoOutLinesAgo = RegEnable(oneOutLineAgo, enable=io.pipelineReady)
     val takeOneLineAgo = (threeRdAddrAgo === twoRdAddrAgo) & io.wrEn
     val takeTwoLinesAgo = RegEnable((threeRdAddrAgo === oneRdAddrAgo) & io.wrEn, false.B, enable=io.pipelineReady)
     val takeThreeLinesAgo = RegEnable(RegEnable((threeRdAddrAgo === io.rdAddr) & io.wrEn, false.B, enable=io.pipelineReady), false.B, enable=io.pipelineReady)
