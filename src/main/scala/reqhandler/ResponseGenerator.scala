@@ -185,7 +185,10 @@ class ResponseGeneratorOneOutputArbitraryEntriesPerRow(idWidth: Int=ResponseGene
 
     /* Input queue */
     val inputQueue = Module(new Queue(new RespGenIO(memDataWidth, offsetWidth, idWidth, numEntriesPerRow), inputQueuesDepth))
-    inputQueue.io.enq <> io.in
+    // inputQueue.io.enq <> io.in
+    inputQueue.io.enq.valid := io.in.valid
+    inputQueue.io.enq.bits  := io.in.bits
+    io.in.ready             := RegNext(inputQueue.io.enq.ready & (inputQueue.io.count =/= (inputQueuesDepth - 1).U))
 
     /* Control signals (written by the FSM) */
     /* Enable currentEntryIndex counter */

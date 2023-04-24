@@ -98,16 +98,14 @@ numMemoryPorts=${numMemoryPorts}
 	def ipName(): String = s"""FPGAMSHR_ra${FPGAMSHR.reqAddrWidth}
 _id${FPGAMSHR.reqIdWidth}
 _in${FPGAMSHR.numInputs}
-_mlx_unibk${FPGAMSHR.numReqHandlers}
-_1d
+_bk${FPGAMSHR.numReqHandlers}
+_csz${if((FPGAMSHR.cacheSizeBytes > 0) && (FPGAMSHR.numCacheWays > 0)) FPGAMSHR.cacheSizeBytes else 0}
 _ht${FPGAMSHR.numHashTables}
 _mshr${FPGAMSHR.numMSHRPerHashTable}
 _st${if(FPGAMSHR.numHashTables > 0) FPGAMSHR.mshrAssocMemorySize else 0}
 _se${if(FPGAMSHR.numSubentriesPerRow == 0) FPGAMSHR.calSubentryPerLine() else FPGAMSHR.numSubentriesPerRow}
 ${if (FPGAMSHR.sameHashFunction) "_nocuckoo" else ""}
-_cw${if((FPGAMSHR.cacheSizeBytes > 0) && (FPGAMSHR.numCacheWays > 0)) FPGAMSHR.numCacheWays else 0}
-_csz${if((FPGAMSHR.cacheSizeBytes > 0) && (FPGAMSHR.numCacheWays > 0)) FPGAMSHR.cacheSizeBytes else 0}
-_xpc${FPGAMSHR.numMemoryPorts}""".replace("\n", "") + (if(FPGAMSHR.useROB) "_rob" else "") + (if(Profiling.enable) "" else "_noprof")
+_mp${FPGAMSHR.numMemoryPorts}""".replace("\n", "") + (if(FPGAMSHR.useROB) "_rob" else "") + (if(Profiling.enable) "" else "_noprof") + "_uni"
 
 	def calSubentryPerLine(): Int = {
 		val idWidth = FPGAMSHR.reqIdWidth + log2Ceil(FPGAMSHR.numInputs)
