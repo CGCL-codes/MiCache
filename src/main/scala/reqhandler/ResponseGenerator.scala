@@ -184,11 +184,11 @@ class ResponseGeneratorOneOutputArbitraryEntriesPerRow(idWidth: Int=ResponseGene
     })
 
     /* Input queue */
-    val inputQueue = Module(new Queue(new RespGenIO(memDataWidth, offsetWidth, idWidth, numEntriesPerRow), inputQueuesDepth))
+    // val inputQueue = Module(new Queue(new RespGenIO(memDataWidth, offsetWidth, idWidth, numEntriesPerRow), inputQueuesDepth))
     // inputQueue.io.enq <> io.in
-    inputQueue.io.enq.valid := io.in.valid
-    inputQueue.io.enq.bits  := io.in.bits
-    io.in.ready             := RegNext(inputQueue.io.enq.ready & (inputQueue.io.count =/= (inputQueuesDepth - 1).U))
+    // inputQueue.io.enq.valid := io.in.valid
+    // inputQueue.io.enq.bits  := io.in.bits
+    // io.in.ready             := inputQueue.io.enq.ready
 
     /* Control signals (written by the FSM) */
     /* Enable currentEntryIndex counter */
@@ -203,13 +203,18 @@ class ResponseGeneratorOneOutputArbitraryEntriesPerRow(idWidth: Int=ResponseGene
     /* It is not the first iteration, so all the currently selected entries are valid */
     val notFirst = Wire(Bool())
     /* A new response is available: trigger the FSM */
-    val responseStart = inputQueue.io.deq.valid
-    inputQueue.io.deq.ready := responseDone
+    // val responseStart = inputQueue.io.deq.valid
+    // inputQueue.io.deq.ready := responseDone
+    val responseStart = io.in.valid
+    io.in.ready := responseDone
 
     /* Datapath */
-    val currRowEntries = inputQueue.io.deq.bits.entries
-    val currRowData = inputQueue.io.deq.bits.data
-    val currRowLastValidEntry = inputQueue.io.deq.bits.lastValidIdx
+    // val currRowEntries = inputQueue.io.deq.bits.entries
+    // val currRowData = inputQueue.io.deq.bits.data
+    // val currRowLastValidEntry = inputQueue.io.deq.bits.lastValidIdx
+    val currRowEntries = io.in.bits.entries
+    val currRowData = io.in.bits.data
+    val currRowLastValidEntry = io.in.bits.lastValidIdx
 
     val entrySelectionMuxNumInputs = numEntriesPerRow
     val currentEntryIndex = ExclusiveUpDownSaturatingCounter(
@@ -220,7 +225,8 @@ class ResponseGeneratorOneOutputArbitraryEntriesPerRow(idWidth: Int=ResponseGene
       loadValue=currRowLastValidEntry-1.U
     )
 
-    val currentEntry = Wire(new LdBufEntry(offsetWidth, idWidth))
+    // val currentEntry = Wire(new LdBufEntry(offsetWidth, idWidth))
+    val currentEntry = Wire(new Subentry(offsetWidth, idWidth))
     val entryMuxMappings = (0 until entrySelectionMuxNumInputs).map(inPort => (inPort.U -> currRowEntries(inPort)))
     val dataMuxMappings = (0 to maxOffset).map(offset => (offset.U -> currRowData((offset + 1) * reqDataWidth - 1, offset * reqDataWidth)))
     io.out.bits.data := MuxLookup(currentEntry.offset, currRowData(reqDataWidth-1, 0), dataMuxMappings)
@@ -279,7 +285,8 @@ class ResponseGeneratorOneOutputArbitraryEntriesPerRow(idWidth: Int=ResponseGene
       }
     }
     if(Profiling.enable) {
-        val acceptedInputsCount = ProfilingCounter(inputQueue.io.deq.valid & inputQueue.io.deq.ready, io.axiProfiling)
+        // val acceptedInputsCount = ProfilingCounter(inputQueue.io.deq.valid & inputQueue.io.deq.ready, io.axiProfiling)
+        val acceptedInputsCount = ProfilingCounter(io.in.valid & io.in.ready, io.axiProfiling)
         val responsesSentOutCount = ProfilingCounter(io.out.valid & io.out.ready, io.axiProfiling)
         val cyclesOutNotReady = ProfilingCounter(io.out.valid & ~io.out.ready, io.axiProfiling)
         val profilingRegisters = Array(acceptedInputsCount, responsesSentOutCount, cyclesOutNotReady)

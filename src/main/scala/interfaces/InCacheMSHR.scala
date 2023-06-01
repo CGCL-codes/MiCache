@@ -125,17 +125,25 @@ extends SubentryLineWithNoPadding(offsetWidth, idWidth, entriesPerLine) with Has
 	override def cloneType = (new UniRespGenIO(dataWidth, offsetWidth, idWidth, entriesPerLine)).asInstanceOf[this.type]
 }
 
-class PipelineIO(val addrWidth: Int, val idWidth: Int) extends Bundle with HasValid with HasAddr with HasID {
-	val isAlloc = Bool()
+class AllocPipelineIO(val addrWidth: Int, val idWidth: Int) extends Bundle with HasValid with HasAddr with HasID {
 	val isFromStash = Bool()
-	override def cloneType = (new PipelineIO(addrWidth, idWidth)).asInstanceOf[this.type]
+	override def cloneType = (new AllocPipelineIO(addrWidth, idWidth)).asInstanceOf[this.type]
 	def getInvalid() = {
 		val m = Wire(this)
 		m.valid := false.B
 		m.addr := DontCare
 		m.id := DontCare
-		m.isAlloc := DontCare
 		m.isFromStash := DontCare
+		m
+	}
+}
+
+class DeallocPipelineIO(val addrWidth: Int) extends Bundle with HasValid with HasAddr {
+	override def cloneType = (new DeallocPipelineIO(addrWidth)).asInstanceOf[this.type]
+	def getInvalid() = {
+		val m = Wire(this)
+		m.valid := false.B
+		m.addr := DontCare
 		m
 	}
 }

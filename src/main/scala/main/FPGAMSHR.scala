@@ -105,7 +105,7 @@ _mshr${FPGAMSHR.numMSHRPerHashTable}
 _st${if(FPGAMSHR.numHashTables > 0) FPGAMSHR.mshrAssocMemorySize else 0}
 _se${if(FPGAMSHR.numSubentriesPerRow == 0) FPGAMSHR.calSubentryPerLine() else FPGAMSHR.numSubentriesPerRow}
 ${if (FPGAMSHR.sameHashFunction) "_nocuckoo" else ""}
-_mp${FPGAMSHR.numMemoryPorts}""".replace("\n", "") + (if(FPGAMSHR.useROB) "_rob" else "") + (if(Profiling.enable) "" else "_noprof") + "_uni"
+_mp${FPGAMSHR.numMemoryPorts}""".replace("\n", "") + (if(FPGAMSHR.useROB) "_rob" else "") + (if(Profiling.enable) "" else "_noprof") + "_uni_dual"
 
 	def calSubentryPerLine(): Int = {
 		val idWidth = FPGAMSHR.reqIdWidth + log2Ceil(FPGAMSHR.numInputs)

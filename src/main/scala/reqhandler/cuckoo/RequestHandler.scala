@@ -127,10 +127,7 @@ class RequestHandlerCuckoo(reqAddrWidth: Int=RequestHandler.reqAddrWidth, reqDat
   /* Returned data */
   val returnedDataArbiter = Module(new ResettableRRArbiter(new DataIdIO(reqDataWidth, reqIdWidth), 2))
   // returnedDataArbiter.io.in(0) <> cache.io.outData
-  val respQueue = Module(new Queue(mshrManager.io.respOut.bits.cloneType, 3))
-  respQueue.io.enq <> mshrManager.io.respOut
-  returnedDataArbiter.io.in(0) <> respQueue.io.deq
-  // returnedDataArbiter.io.in(0) <> mshrManager.io.respOut
+  returnedDataArbiter.io.in(0) <> mshrManager.io.respOut
   returnedDataArbiter.io.in(1) <> responseGenerator.io.out
   returnedDataArbiter.io.out <> io.inReq.data
 
