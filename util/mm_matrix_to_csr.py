@@ -36,9 +36,9 @@ file_name_no_ext = os.path.splitext(args.input_file)[0]
 file_ext = os.path.splitext(args.input_file)[1]
 if file_ext == '.mtx':
     matrix = scipy.io.mmread(args.input_file).tocsr()
-    pickle_file = file_name_no_ext + '.pickle'
-    with open(pickle_file, 'wb') as fh:
-        pickle.dump(matrix, fh)
+    # pickle_file = file_name_no_ext + '.pickle'
+    # with open(pickle_file, 'wb') as fh:
+    #     pickle.dump(matrix, fh)
 elif file_ext == '.pickle':
     with open(args.input_file, 'rb') as f:
         matrix = pickle.load(f)

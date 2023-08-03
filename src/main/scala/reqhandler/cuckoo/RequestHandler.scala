@@ -111,6 +111,7 @@ class RequestHandlerCuckoo(reqAddrWidth: Int=RequestHandler.reqAddrWidth, reqDat
   // mshrManager.io.outMem <> io.outMemReq
   mshrManager.io.outMem <> io.outMemReq
   mshrManager.io.maxAllowedMSHRs := io.maxAllowedMSHRs
+  mshrManager.io.invalidate := io.invalidate
 
   /* SubentryBuffer */
   // val subentryBuffer = Module(new SubentryBuffer(reqIdWidth, memDataWidth, reqDataWidth, subentriesAddrWidth, numSubentriesPerRow, MSHR.pipelineLatency, nextPtrCacheSize, blockOnNextPtr))
