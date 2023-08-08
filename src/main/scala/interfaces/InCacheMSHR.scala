@@ -54,6 +54,21 @@ class SubentryLine(lineWidth: Int, val offsetWidth: Int, val idWidth: Int, numSu
 	override def cloneType = (new SubentryLine(lineWidth, offsetWidth, idWidth, numSubentriesPerLine, alignWidth)).asInstanceOf[this.type]
 }
 
+object SubentryLineWithNoPadding {
+	def addPadding(raw: Vec[Subentry], gen: SubentryLine): Vec[SubentryWithPadding] = {
+		val out = Wire(gen.cloneType)
+		// out.lastValidIdx := this.lastValidIdx
+		// out.padding      := DontCare
+		out.entries.zip(raw).map(x => {
+			x._1.offset  := x._2.offset
+			x._1.id      := x._2.id
+			x._1.padding := DontCare
+		})
+		out.entries
+	}
+
+}
+
 class SubentryLineWithNoPadding(val offsetWidth: Int, val idWidth: Int, val entriesPerLine: Int) extends Bundle {
 	// val lastValidIdxWidth = log2Ceil(entriesPerLine)
 	// val lastValidIdx = UInt(lastValidIdxWidth.W)
