@@ -21,6 +21,20 @@ class XilinxTrueDualPortReadFirstBRAM(width: Int,
     setResource("/XilinxTrueDualPortReadFirstBRAM.v")
 }
 
+class XilinxTrueDualPortNoChangeBRAM(width: Int,
+                                 depth: Int,
+                                 performance: String="HIGH_PERFORMANCE",
+                                 initFile: String="")
+                                 extends BlackBox(Map("RAM_WIDTH" -> width,
+                                                      "RAM_DEPTH" -> depth,
+                                                      "RAM_PERFORMANCE" -> performance,
+                                                      "INIT_FILE" -> initFile))
+                                 with HasBlackBoxResource {
+    val io = IO(new XilinxTrueDualPortBRAMBlackBoxIO(log2Ceil(depth), width))
+
+    setResource("/XilinxTrueDualPortNoChangeBRAM.v")
+}
+
 class XilinxSimpleDualPortNoChangeBRAM(width: Int,
                                        depth: Int,
                                        performance: String="HIGH_PERFORMANCE",
