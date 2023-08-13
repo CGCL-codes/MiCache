@@ -392,7 +392,7 @@ class InCacheMSHR(
 	for (i <- subentryLineType.entriesPerLine * subentryLineType.entryBytes until memDataWidth / subentryAlignWidth) {
 		updateWrEnPortA(i) := false.B
 	}
-	stash.io.inSubline     := updatedSubentryLine.withNoPadding().entries
+	stash.io.inSubline     := updatedSubentryLine.withNoPadding().entries(0)
 	stash.io.inSublineMask := Vec((0 until numEntriesPerLine).map(i => updateEntryOH(i)))
 
 	// dealloc
@@ -452,17 +452,14 @@ class InCacheMSHR(
 		allocWrEns(i)      := RegEnable(mshrAllocMatches(i) | ((~allocHit | pplAllocMatch.isFromStash & allocPplMatchReady) & ((hashTableToUpdate(i) & ~allFull) | (evictOH(i) & allFull))), enable=allocPplWriteReady)
 		allocWritings(i)   := pplAllocWriteValid & allocWrEns(i) & allocPplWriteReady
 		deallocWritings(i) := pplDeallocWrite.valid & matchDeallocWrEn(i) & deallocPplWriteReady
-		// tagMems(i).addrb  := MuxCase(deallocReadAddrs(i), Array(allocWritings(i) -> storeToLoads(i).wrAddrWriteA, deallocWritings(i) -> storeToLoads(i).wrAddrWriteD))
-		tagMems(i).addrb  := MuxCase(deallocReadAddrs(i), Array(deallocWritings(i) -> storeToLoads(i).wrAddrWriteD, allocWritings(i) -> storeToLoads(i).wrAddrWriteA))
+		tagMems(i).addrb  := MuxCase(deallocReadAddrs(i), Array(allocWritings(i) -> storeToLoads(i).wrAddrWriteA, deallocWritings(i) -> storeToLoads(i).wrAddrWriteD))
 		tagMems(i).enb    := allocWritings(i) | deallocWritings(i) | (pplDeallocRead.valid & deallocPplStashReady)
 		// tagMems(i).regceb := RegNext(deallocReadEns(i))
 		tagMems(i).regceb := deallocPplMatchReady | (delayedResp(0) & delayedIsHitUnread(1) & delayedDeallocOH(0)(i))
 		tagMems(i).web    := allocWritings(i) | deallocWritings(i)
-		// tagMems(i).dinb   := Mux(allocWritings(i), updatedAllocTag, updatedDeallocTag).asUInt
-		tagMems(i).dinb   := Mux(deallocWritings(i), updatedDeallocTag, updatedAllocTag).asUInt
+		tagMems(i).dinb   := Mux(allocWritings(i), updatedAllocTag, updatedDeallocTag).asUInt
 		storeToLoads(i).wrEn := tagMems(i).web
-		// storeToLoads(i).wrAddr := Mux(allocWritings(i), storeToLoads(i).wrAddrWriteA, storeToLoads(i).wrAddrWriteD)
-		storeToLoads(i).wrAddr := Mux(deallocWritings(i), storeToLoads(i).wrAddrWriteD, storeToLoads(i).wrAddrWriteA)
+		storeToLoads(i).wrAddr := Mux(allocWritings(i), storeToLoads(i).wrAddrWriteA, storeToLoads(i).wrAddrWriteD)
 		storeToLoads(i).dataInFromMemD := tagMems(i).doutb.asTypeOf(tagType)
 		storeToLoads(i).dataOutToMem := tagMems(i).dinb.asTypeOf(tagType)
 		deallocReadEns(i) := ~tagMems(i).web & pplDeallocRead.valid & deallocPplStashReady
@@ -555,17 +552,17 @@ class InCacheMSHR(
 
 	/* Pipeline ready signal */
 	val stallTagsBramPortBusy = Wire(Bool())
-	stallTagsBramPortBusy := pplDeallocWrite.valid & (allocWritings.asUInt & matchDeallocWrEn(numHashTables - 1, 0)).asUInt.orR
+	stallTagsBramPortBusy := pplDeallocWrite.valid & pplAllocWriteValid & (allocWrEns.asUInt & matchDeallocWrEn(numHashTables - 1, 0)).asUInt.orR
 	// stallTagsBramPortBusy := pplAllocWriteValid & Vec(deallocWritings.zip(allocWrEns).map(x => x._1 & x._2)).asUInt.orR
 	val stallAtSameAddr = Wire(Bool())
 	// stallAtSameAddr := Vec(storeToLoads.map(x => x.hazardMatchAMatchD)).asUInt.orR & ((allocPplMatchReady & pplAllocMatch.valid) | pplAllocMatch.isFromStash) & pplDeallocMatch.valid
-	stallAtSameAddr := Vec(storeToLoads.map(x => x.hazardMatchAMatchD)).asUInt.orR & (pplDeallocMatch.valid & pplAllocMatch.valid & ~(pplAllocMatch.isFromStash & (getTag(pplDeallocMatch.addr) === getTag(pplAllocMatch.addr))))
+	stallAtSameAddr := Vec(storeToLoads.map(x => x.hazardMatchAMatchD)).asUInt.orR & pplDeallocMatch.valid & pplAllocMatch.valid & ~((pplAllocMatch.isFromStash & (getTag(pplDeallocMatch.addr) === getTag(pplAllocMatch.addr))) | stash.io.hazardMatchAMatchD)
 	// alloc
 	val respCount = respQueue.io.count +& delayedCacheHit.last
 	// allocPplWriteReady := ~respOutEb.io.in.valid | respOutEb.io.in.ready
 	allocPplRespReady := RegNext((respCount < InCacheMSHR.respQueueDepth.U) | (((respCount === InCacheMSHR.respQueueDepth.U) | ~allocPplRespReady) & respQueue.io.deq.fire()), init=true.B)
 
-	allocPplWriteReady := (allocPplRespReady | ~(delayedCacheHit(0) | delayedEvict(0) | delayedEvict(1) | delayedCacheHit(1))) & ~stash.io.hazardWriteAEvictA
+	allocPplWriteReady := (allocPplRespReady | ~(delayedCacheHit(0) | delayedEvict(0) | delayedEvict(1) | delayedCacheHit(1))) //& ~stash.io.hazardWriteAEvictA
 	// allocPplWriteReady := (allocPplRespReady | ~(delayedCacheHit(0) | delayedEvict(0) | delayedEvict(1) | delayedCacheHit(1))) & ~stash.io.hazardWriteAEvictA & ~stallTagsBramPortBusy
 
 	val stallForwardingFromDealloc = Wire(Bool())
@@ -722,7 +719,7 @@ class InCacheMSHRStash(genTag: UniTag, lastTableIdxWidth: Int, genSub: SubentryL
 		// alloc new subentry
 		val inLastValidIdx = Flipped(ValidIO(stashEntryType.lastValidIdx.cloneType))
 		val inSublineMask  = Input(Vec(genSub.entriesPerLine, Bool()))
-		val inSubline      = Input(genSub.entries)
+		val inSubline      = Input(genSub.entries(0))
 		// dealloc query in
 		val lookupTagD       = Flipped(ValidIO(stashEntryType.tag.cloneType))
 		// dealloc query result out (with one cycle delay)
@@ -741,7 +738,7 @@ class InCacheMSHRStash(genTag: UniTag, lastTableIdxWidth: Int, genSub: SubentryL
 		val hazardStashStallA  = Output(Bool())
 		val hazardMatchAMatchD = Output(Bool())
 		val hazardWriteAMatchD = Output(Bool())
-		val hazardWriteAEvictA = Output(Bool())
+		// val hazardWriteAEvictA = Output(Bool())
 		// entry counter
 		val count = Output(UInt(log2Ceil(numStashEntries + 1).W))
 		// re-insert
@@ -758,7 +755,7 @@ class InCacheMSHRStash(genTag: UniTag, lastTableIdxWidth: Int, genSub: SubentryL
 	// memory init
 	val invalidMemoryEntry = stashEntryType.getInvalidEntry()
 	val tags = RegInit(Vec(Seq.fill(numStashEntries)(invalidMemoryEntry)))
-	val subLines = Mem(numStashEntries, genSub.entries)
+	val subentries = Array.fill(genSub.entriesPerLine)(Mem(numStashEntries, genSub.entries(0)))
 	// match for deallocs
 	val matchIncomingD  = io.inVictim.valid & (io.inVictim.bits.tag === io.lookupTagD.bits) & io.lookupTagD.valid
 	val matchesD        = tags.map(x => x.valid & (x.tag === io.lookupTagD.bits) & io.lookupTagD.valid)
@@ -811,14 +808,14 @@ class InCacheMSHRStash(genTag: UniTag, lastTableIdxWidth: Int, genSub: SubentryL
 	io.hazardMatchAMatchD := (matches1CycAgoD & matches1CycAgoA).asUInt.orR
 	io.hazardWriteDMatchA := (matches1CycAgoA & matches2CycAgoD).asUInt.orR
 	io.hazardWriteAMatchD := (matches1CycAgoD & matches2CycAgoA).asUInt.orR
-	io.hazardWriteAEvictA := io.inVictimSubNo.valid & io.inLastValidIdx.valid
+	// io.hazardWriteAEvictA := io.inVictimSubNo.valid & io.inLastValidIdx.valid
 	// indicate victim idx
 	io.newVictimNo := OHToUInt(emptyEntrySelect)
 	// entry counter
 	io.count := count
 
-	io.reinsertSublineA := subLines.read(matchNo2CycAgoA)
-	io.matchingSublineD := subLines.read(matchNo2CycAgoD)
+	io.reinsertSublineA.zip(subentries).foreach { case(o, s) => o := s.read(matchNo2CycAgoA) }
+	io.matchingSublineD.zip(subentries).foreach { case(o, s) => o := s.read(matchNo2CycAgoD) }
 
 	for (i <- 0 until numStashEntries) {
 		// dealloc lookup might deallocate the incoming victim
@@ -857,10 +854,18 @@ class InCacheMSHRStash(genTag: UniTag, lastTableIdxWidth: Int, genSub: SubentryL
 		outArbiter.io.in(i).bits  := tags(i).tag
 	}
 
-	when (io.inVictimSubNo.valid & io.pipelineReady3A) {
-		subLines.write(io.inVictimSubNo.bits, io.inVictimSubline, io.inVictimSubMask)
-	} .elsewhen (io.inLastValidIdx.valid & io.pipelineReady2A) {
-		subLines.write(matchNo2CycAgoA, io.inSubline, io.inSublineMask)
+	// when (io.inVictimSubNo.valid & io.pipelineReady3A) {
+	// 	subLines.write(io.inVictimSubNo.bits, io.inVictimSubline, io.inVictimSubMask)
+	// } .elsewhen (io.inLastValidIdx.valid & io.pipelineReady2A) {
+	// 	subLines.write(matchNo2CycAgoA, io.inSubline, io.inSublineMask)
+	// }
+	for (i <- 0 until genSub.entriesPerLine) {
+		when (io.inVictimSubNo.valid & io.inVictimSubMask(i) & io.pipelineReady3A) {
+			subentries(i).write(io.inVictimSubNo.bits, io.inVictimSubline(i))
+		}
+		when (io.inLastValidIdx.valid & io.inSublineMask(i) & io.pipelineReady2A) {
+			subentries(i).write(matchNo2CycAgoA, io.inSubline)
+		}
 	}
 
 	io.outToPipeline.valid  := outArbiter.io.out.valid
