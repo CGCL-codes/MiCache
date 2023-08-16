@@ -176,9 +176,19 @@ class FPGAMSHR extends Module {
 		val in = Vec(FPGAMSHR.numInputs, new AXI4FullReadOnly(UInt(FPGAMSHR.reqDataWidth.W), FPGAMSHR.reqAddrWidth, FPGAMSHR.reqIdWidth))
 		val out = Flipped(Vec(FPGAMSHR.numMemoryPorts, new AXI4FullReadOnly(UInt(FPGAMSHR.memDataWidth.W), FPGAMSHR.memAddrWidth, FPGAMSHR.memIdWidth)))
 		val axiProfiling = new AXI4Lite(UInt(Profiling.dataWidth.W), totalProfilingAddrWidth)
-		val cycleCountEn = Input(Bool())
+		val pe_running = Vec(FPGAMSHR.numInputs, Input(Bool()))
+		val pe_done = Vec(FPGAMSHR.numInputs, Input(Bool()))
+		val pe_all_running = Output(Bool())
 		// val clock2x = Input(Clock())
 	})
+
+	val cycleCountEn = RegInit(false.B)
+	when (io.pe_done.asUInt.andR) {
+		cycleCountEn := false.B
+	} .elsewhen (io.pe_running.asUInt.andR & ~cycleCountEn) {
+		cycleCountEn := true.B
+	}
+	io.pe_all_running := cycleCountEn
 
 	/* Control interface */
 	/* Address 0 (control):
@@ -398,7 +408,7 @@ class FPGAMSHR extends Module {
 		inputProfilingReadEb.io.in.valid := io.axiProfiling.ARVALID
 		io.axiProfiling.ARREADY          := inputProfilingReadEb.io.in.ready
 
-		val totalCycleCounter = ProfilingCounter(io.cycleCountEn, Profiling.dataWidth, snapshot, clear)
+		val totalCycleCounter = ProfilingCounter(cycleCountEn, Profiling.dataWidth, snapshot, clear)
 		val cyclesExtMemNotReady = io.out.map(x => ProfilingCounter(x.ARVALID & ~x.ARREADY, Profiling.dataWidth, snapshot, clear))
 		val reqSent = io.out.map(x => ProfilingCounter(x.ARVALID & x.ARREADY, Profiling.dataWidth, snapshot, clear))
 		val respReceived = io.out.map(x => ProfilingCounter(x.ARVALID & x.ARREADY, Profiling.dataWidth, snapshot, clear))
