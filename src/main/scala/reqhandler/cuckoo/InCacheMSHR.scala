@@ -284,8 +284,10 @@ class InCacheMSHR(
 	// For simulation
 	val cacheMiss = ~cacheHit & pplAllocMatch.valid & ~pplAllocMatch.isFromStash
 	val mshrAllocHit = Vec(mshrAllocMatches).asUInt.orR & ~pplAllocMatch.isFromStash
+	val stashAllocHit = stash.io.hitA & ~pplAllocMatch.isFromStash
 	dontTouch(cacheMiss)
 	dontTouch(mshrAllocHit)
+	dontTouch(stashAllocHit)
 
 	val allValid = Vec(tagsAllocRead.map(x => x.valid)).asUInt.andR
 	val allIsMSHR = Vec(tagsAllocRead.map(x => x.isMSHR)).asUInt.andR
@@ -375,15 +377,14 @@ class InCacheMSHR(
 	updatedAllocTag.isMSHR       := true.B
 	updatedAllocTag.tag          := getTag(pplAllocWrite.addr)
 	updatedAllocTag.lastValidIdx := Mux(matchAllocWrEn.orR, allocSubIdx + ~pplAllocWrite.isFromStash, 0.U)
-	// pplAllocWriteValid := pplAllocWrite.valid & ~subentryFull
-	subFullDelayQueue.io.enq.valid     := RegEnable(pplAllocMatch.valid & subentryFull & allocPplMatchReady, enable=allocPplWriteReady, init=false.B)
+	subFullDelayQueue.io.enq.valid     := RegEnable(pplAllocMatch.valid & subentryFull & allocPplMatchReady, enable=allocPplWriteReady, init=false.B) & allocPplWriteReady
 	subFullDelayQueue.io.enq.bits.addr := pplAllocWrite.addr
 	subFullDelayQueue.io.enq.bits.id   := pplAllocWrite.id
 	val updatedSubentryLine = Wire(subentryLineType.cloneType)
 	updatedSubentryLine.entries.map(x => {
-		x.offset  := getOffset(pplAllocWrite.addr)
-		x.id      := pplAllocWrite.id
-		x.padding := DontCare
+		x        := DontCare
+		x.offset := getOffset(pplAllocWrite.addr)
+		x.id     := pplAllocWrite.id
 	})
 	val updateEntryOH = UIntToOH(updatedAllocTag.lastValidIdx)
 	val updateWrEnPortA = Wire(Vec(memDataWidth / subentryAlignWidth, Bool()))
@@ -471,11 +472,12 @@ class InCacheMSHR(
 	dataMem.reset := reset
 	// alloc
 	dataMem.addra  := Cat(OHToUInt(tableAllocSel), Mux1H(tableAllocSel, storeToLoads.map(x => x.wrAddrWriteA)))
-	dataMem.dina   := Mux(pplAllocWrite.isFromStash, SubentryLineWithNoPadding.addPadding(stash.io.reinsertSublineA, subentryLineType).asTypeOf(cacheDataType), updatedSubentryLine.asTypeOf(cacheDataType))
+	dataMem.dina   := Mux(pplAllocWrite.isFromStash, SubentryLineWithNoPadding.addPadding(stash.io.matchingSubline, subentryLineType).asTypeOf(cacheDataType), updatedSubentryLine.asTypeOf(cacheDataType))
 	dataMem.ena    := allocPplWriteReady & pplAllocWrite.valid & (~stashAllocWrEn | pplAllocWrite.isFromStash)
 	dataMem.regcea := allocPplRespReady & (delayedEvict(1) | delayedCacheHit(1))
 	dataMem.wea    := updateWrEnPortA.asUInt
-	stash.io.inLastValidIdx.valid := pplAllocWrite.valid & stashAllocWrEn & ~pplAllocWrite.isFromStash
+	// stash.io.inLastValidIdx.valid := pplAllocWrite.valid & stashAllocWrEn & ~pplAllocWrite.isFromStash
+	stash.io.inLastValidIdx.valid := RegEnable(pplAllocMatch.valid & allocPplMatchReady & ~subentryFull & stash.io.hitA & ~pplAllocMatch.isFromStash, enable=allocPplWriteReady, init=false.B)
 	stash.io.inLastValidIdx.bits  := updatedAllocTag.lastValidIdx
 	// dealloc, stash read, and eviction
 	dataMem.addrb  := Cat(OHToUInt(tableDeallocSel), Mux1H(tableDeallocSel, storeToLoads.map(x => x.wrAddrWriteD)))
@@ -518,7 +520,7 @@ class InCacheMSHR(
 	val respGenQueue = Module(new Queue(io.respGenOut.bits.cloneType, InCacheMSHR.respGenQueueDepth, pipe=true))
 	respGenQueue.io.enq.valid             := delayedResp.last & respGenQueue.io.enq.ready
 	respGenQueue.io.enq.bits.data         := respDataQueue.io.deq.bits
-	respGenQueue.io.enq.bits.entries      := Mux(delayedRespFromStash.last, RegEnable(RegEnable(stash.io.matchingSublineD, enable=deallocPplRespReady), enable=deallocPplRespReady), 
+	respGenQueue.io.enq.bits.entries      := Mux(delayedRespFromStash.last, RegEnable(RegEnable(stash.io.matchingSubline, enable=deallocPplRespReady), enable=deallocPplRespReady), 
 													dataMem.doutb.asTypeOf(subentryLineType).withNoPadding().entries)
 	respGenQueue.io.enq.bits.lastValidIdx := Mux(delayedIsHitUnread.last, Mux1H(delayedDeallocOH.last, tagMems.map(x => x.doutb.asTypeOf(tagType).lastValidIdx)), delayedLastValidIdx.last)
 	respDataQueue.io.deq.ready            := respGenQueue.io.enq.ready & respGenQueue.io.enq.valid
@@ -565,8 +567,7 @@ class InCacheMSHR(
 	val respCount = respQueue.io.count +& delayedCacheHit.last
 	allocPplRespReady := RegNext((respCount < InCacheMSHR.respQueueDepth.U) | (((respCount === InCacheMSHR.respQueueDepth.U) | ~allocPplRespReady) & respQueue.io.deq.fire()), init=true.B)
 
-	allocPplWriteReady := (allocPplRespReady | ~(delayedCacheHit(0) | delayedEvict(0) | delayedEvict(1) | delayedCacheHit(1))) //& ~stash.io.hazardWriteAEvictA
-	// allocPplWriteReady := (allocPplRespReady | ~(delayedCacheHit(0) | delayedEvict(0) | delayedEvict(1) | delayedCacheHit(1))) & ~stash.io.hazardWriteAEvictA & ~stallTagsBramPortBusy
+	allocPplWriteReady := (allocPplRespReady | ~(delayedCacheHit(0) | delayedEvict(0) | delayedEvict(1) | delayedCacheHit(1))) & ~stash.io.hazardEvictAWriteA
 
 	val stallForwardingFromDealloc = Wire(Bool())
 	// val hazardForwardingFromDealloc = ((Vec(storeToLoads.map(x => x.hazardWriteDMatchA)).asUInt & matchDeallocWrEn(numHashTables - 1, 0)).orR | stash.io.hazardWriteDMatchA) & pplAllocMatch.valid & pplDeallocWrite.valid
@@ -581,7 +582,7 @@ class InCacheMSHR(
 
 	val respGenCount = respGenQueue.io.count +& respDataQueue.io.count + (pplDeallocWrite.valid & deallocWrEn & deallocPplWriteReady)
 	val respGenReady = RegNext((respGenCount < InCacheMSHR.respGenQueueDepth.U) | ((respGenCount >= InCacheMSHR.respGenQueueDepth.U) & respGenQueue.io.deq.fire()), init=true.B)
-	deallocPplWriteReady := respGenReady & ~stallTagsBramPortBusy //& ~stallDataBramPortBusy
+	deallocPplWriteReady := respGenReady & ~stallTagsBramPortBusy & ~stash.io.hazardWriteAWriteD
 
 	val stallForwardingFromAlloc = Wire(Bool())
 	// stallForwardingFromAlloc := (Vec(storeToLoads.zip(allocWrEns).map(x => x._1.hazardWriteAMatchD & x._2)).asUInt.orR | stash.io.hazardWriteAMatchD) & pplDeallocMatch.valid & pplAllocWrite.valid & ~allocPplWriteReady
@@ -618,46 +619,23 @@ class InCacheMSHR(
 		/* The order by which registers are appended to profilingRegisters defines the register map */
 		val profilingRegisters = scala.collection.mutable.ListBuffer[UInt]()
 		val currentlyUsedMSHR = RegEnable(allocatedMSHRCounter, enable=io.axiProfiling.snapshot)
-		profilingRegisters += currentlyUsedMSHR
 		val maxUsedMSHR = ProfilingMax(allocatedMSHRCounter, io.axiProfiling)
-		profilingRegisters += maxUsedMSHR
 		val maxUsedSubentry = ProfilingMax(Mux(pplAllocWrite.valid, updatedAllocTag.lastValidIdx, 0.U), io.axiProfiling)
-		profilingRegisters += maxUsedSubentry
 		val collisionCount = ProfilingCounter(evictCounterEnable, io.axiProfiling) // 0
-		profilingRegisters += collisionCount
 		val cyclesSpentResolvingCollisions = ProfilingCounter(pplAllocMatch.isFromStash & pplAllocMatch.valid & allocPplMatchReady, io.axiProfiling) // 1
-		profilingRegisters += cyclesSpentResolvingCollisions
 		val stallTriggerCount = ProfilingCounter(~allocPplStashReady & ~RegNext(~allocPplStashReady), io.axiProfiling) // 2
-		profilingRegisters += stallTriggerCount
 		val cyclesSpentStalling = ProfilingCounter(~allocPplStashReady & io.allocIn.valid, io.axiProfiling) // 3
-		profilingRegisters += cyclesSpentStalling
-		val acceptedAllocsCount = ProfilingCounter(pplAllocMatch.valid & allocPplMatchReady, io.axiProfiling) // 4
-		profilingRegisters += acceptedAllocsCount
+		val acceptedAllocsCount = ProfilingCounter(io.allocIn.valid & io.allocIn.ready, io.axiProfiling) // 4
 		val acceptedDeallocsCount = ProfilingCounter(io.deallocIn.valid & io.deallocIn.ready, io.axiProfiling) // 5
-		profilingRegisters += acceptedDeallocsCount
 		val cyclesAllocsStalled = ProfilingCounter(io.allocIn.valid & ~io.allocIn.ready, io.axiProfiling) // 6
-		profilingRegisters += cyclesAllocsStalled
 		val cyclesDeallocsStalled = ProfilingCounter(io.deallocIn.valid & ~io.deallocIn.ready, io.axiProfiling) // 7
-		profilingRegisters += cyclesDeallocsStalled
 		val enqueuedMemReqsCount = ProfilingCounter(externalMemoryQueue.io.enq.valid, io.axiProfiling) // 8
-		profilingRegisters += enqueuedMemReqsCount
-		// val cacheHitCount = ProfilingCounter(respOutEb.io.in.valid & respOutEb.io.in.ready, io.axiProfiling) // 9
 		val cacheHitCount = ProfilingCounter(io.respOut.valid & io.respOut.ready, io.axiProfiling) // 9
-		profilingRegisters += cacheHitCount
-		// val dequeuedMemReqsCount = ProfilingCounter(externalMemoryQueue.io.deq.valid, io.axiProfiling)
-		// profilingRegisters += dequeuedMemReqsCount
-		// val cyclesOutLdBufNotReady = ProfilingCounter(io.outLdBuf.valid & ~io.outLdBuf.ready, io.axiProfiling)
-		// profilingRegisters += cyclesOutLdBufNotReady
+		val subFullCount = ProfilingCounter(subFullDelayQueue.io.enq.valid, io.axiProfiling) // 9
+		val cyclesStallSubFull = ProfilingCounter(io.allocIn.valid & stallAllocsSubFull, io.axiProfiling)
+		val deallocsRetryCount = ProfilingCounter(deallocRetrying, io.axiProfiling)
 		// This is a very ugly hack to prevent sign extension when converting currValue to signed int, since asSInt does not accept a width as a parameter
 		val accumUsedMSHR = ProfilingArbitraryIncrementCounter(Array((true.B -> (allocatedMSHRCounter + 0.U((allocatedMSHRCounter.getWidth+1).W)).asSInt)), io.axiProfiling)
-		profilingRegisters += accumUsedMSHR._1
-		val cyclesStallSubFull = ProfilingCounter(io.allocIn.valid & stallAllocsSubFull, io.axiProfiling)
-		profilingRegisters += cyclesStallSubFull
-		val deallocsRetryCount = ProfilingCounter(deallocRetrying, io.axiProfiling)
-		profilingRegisters += deallocsRetryCount
-		// val cyclesAllocPipelineNotReady = ProfilingCounter(~allocP, io.axiProfiling)
-		// profilingRegisters += cyclesPipelineNotReady
-		// readLine.validCount, writeLine.validCount, wrEn
 		val pplAndStall = Wire(Vec(16, Bool()))
 		pplAndStall(0)  := allocPplStashReady
 		pplAndStall(1)  := allocPplMatchReady
@@ -678,6 +656,24 @@ class InCacheMSHR(
 		// pplAndStall(16) := stallReinsertDealloc
 		// pplAndStall(18) := stallHazardWithReinserting
 		val pplAndStallSnapshot = RegEnable(pplAndStall.asUInt, enable=io.axiProfiling.snapshot)
+
+		profilingRegisters += currentlyUsedMSHR
+		profilingRegisters += maxUsedMSHR
+		profilingRegisters += maxUsedSubentry
+		profilingRegisters += collisionCount
+		profilingRegisters += cyclesSpentResolvingCollisions
+		profilingRegisters += stallTriggerCount
+		profilingRegisters += cyclesSpentStalling
+		profilingRegisters += acceptedAllocsCount
+		profilingRegisters += acceptedDeallocsCount
+		profilingRegisters += cyclesAllocsStalled
+		profilingRegisters += cyclesDeallocsStalled
+		profilingRegisters += enqueuedMemReqsCount
+		profilingRegisters += cacheHitCount
+		profilingRegisters += subFullCount
+		profilingRegisters += accumUsedMSHR._1
+		profilingRegisters += cyclesStallSubFull
+		profilingRegisters += deallocsRetryCount
 		profilingRegisters += pplAndStallSnapshot
 		if(Profiling.enableHistograms) {
 		val currentlyUsedMSHRHistogram = (0 until log2Ceil(numMSHRTotal)).map(i => ProfilingCounter(allocatedMSHRCounter >= (1 << i).U, io.axiProfiling))
@@ -718,7 +714,6 @@ class InCacheMSHRStash(genTag: UniTag, lastTableIdxWidth: Int, genSub: SubentryL
 		val hitA                  = Output(Bool())
 		val matchingLastValidIdxA = Output(stashEntryType.lastValidIdx.cloneType)
 		val matchingLastTableIdxA = Output(stashEntryType.lastTableIdx.cloneType)
-		val reinsertSublineA      = Output(genSub.entries)
 		// alloc new subentry
 		val inLastValidIdx = Flipped(ValidIO(stashEntryType.lastValidIdx.cloneType))
 		val inSublineMask  = Input(Vec(genSub.entriesPerLine, Bool()))
@@ -728,7 +723,8 @@ class InCacheMSHRStash(genTag: UniTag, lastTableIdxWidth: Int, genSub: SubentryL
 		// dealloc query result out (with one cycle delay)
 		val hitD                  = Output(Bool())
 		val matchingLastValidIdxD = Output(stashEntryType.lastValidIdx.cloneType)
-		val matchingSublineD      = Output(genSub.entries)
+		// matching subentry line for re-insertion and deallocation
+		val matchingSubline       = Output(genSub.entries)
 		// victim in
 		val inVictim        = Flipped(ValidIO(new StashVictimInIO(genTag.tagWidth, genTag.lastValidIdxWidth, lastTableIdxWidth)))
 		val newVictimNo     = Output(UInt(log2Ceil(numStashEntries).W)) // tell data BRAM where the victim's subentries should go
@@ -741,7 +737,8 @@ class InCacheMSHRStash(genTag: UniTag, lastTableIdxWidth: Int, genSub: SubentryL
 		val hazardStashStallA  = Output(Bool())
 		val hazardMatchAMatchD = Output(Bool())
 		// val hazardWriteAMatchD = Output(Bool())
-		// val hazardWriteAWriteD = Output(Bool())
+		val hazardWriteAWriteD = Output(Bool())
+		val hazardEvictAWriteA = Output(Bool())
 		// entry counter
 		val count = Output(UInt(log2Ceil(numStashEntries + 1).W))
 		// re-insert
@@ -782,31 +779,32 @@ class InCacheMSHRStash(genTag: UniTag, lastTableIdxWidth: Int, genSub: SubentryL
 	val matches2CycAgoA = RegEnable(matches1CycAgoA & Fill(numStashEntries, io.pipelineReady1A), init=0.U, enable=io.pipelineReady2A)
 	val matchNo2CycAgoA = RegEnable(OHToUInt((0 until numStashEntries).map(i => matches1CycAgoA(i))), enable=io.pipelineReady2A)
 	// forwarding the latest idx for matching stage
-	val successiveMatch = ((matches1CycAgoA | matches1CycAgoD) & matches2CycAgoA).orR & io.inLastValidIdx.valid
+	val successiveMatchA = (matches1CycAgoA & matches2CycAgoA).orR & io.inLastValidIdx.valid
+	val successiveMatchD = (matches1CycAgoD & matches2CycAgoA).orR & io.inLastValidIdx.valid
 	// subentry line done transit
 	val inVictimSubOH = UIntToOH(io.inVictimSubNo.bits)
 	// re-insert
 	val outArbiter = Module(new ResettableRRArbiter(io.outToPipeline.bits.cloneType, numStashEntries))
-	// val reinsertMatchValid = RegEnable(io.reinsertValid & io.pipelineReadyA, enable=io.pipelineReady1A, init=false.B)
-	// val reinsertWriteValid = RegEnable(reinsertMatchValid & io.pipelineReady1A, enable=io.pipelineReady2A, init=false.B)
+	val reinsertMatchValid = RegEnable(io.reinsertValid & io.pipelineReadyA, enable=io.pipelineReady1A, init=false.B)
+	val reinsertWriteValid = RegEnable(reinsertMatchValid & io.pipelineReady1A, enable=io.pipelineReady2A, init=false.B)
 	val deallocAfterUndoneReinsert = (0 until numStashEntries).map(i => (matches1CycAgoA(i) & ~io.pipelineReady1A) & (tags(i).tag === io.lookupTagD.bits) & io.lookupTagD.valid)
 	val validMap = (0 until numStashEntries).map(i => tags(i).valid | matches1CycAgoA(i) | matches1CycAgoD(i) | (matches2CycAgoD(i) & ~io.pipelineReady2D))
-	// val validMap = (0 until numStashEntries).map(i => tags(i).valid | matches1CycAgoA(i) | matches1CycAgoD(i) | matches2CycAgoA(i) | matches2CycAgoD(i))
 	val count =  PopCount(validMap)
 
-	val forwardedInLastValidIndex = RegEnable(io.inLastValidIdx.bits, enable=successiveMatch)
-	val forwardedToMatchA = RegEnable(successiveMatch & ~io.pipelineReady1A, init=false.B, enable=io.pipelineReady1A ^ RegNext(io.pipelineReady1A))
-	val forwardedToMatchD = RegEnable(successiveMatch & ~io.pipelineReady1D, init=false.B, enable=io.pipelineReady1D ^ RegNext(io.pipelineReady1D))
+	val forwardedInLastValidIndexA = RegEnable(io.inLastValidIdx.bits, enable=successiveMatchA)
+	val forwardedInLastValidIndexD = RegEnable(io.inLastValidIdx.bits, enable=successiveMatchD)
+	val forwardedToMatchA = RegEnable(successiveMatchA & ~io.pipelineReady1A, init=false.B, enable=io.pipelineReady1A ^ RegNext(io.pipelineReady1A))
+	val forwardedToMatchD = RegEnable(successiveMatchD & ~io.pipelineReady1D, init=false.B, enable=io.pipelineReady1D ^ RegNext(io.pipelineReady1D))
 
 	// for alloc stash stage
 	io.reinsertValid := Vec((0 until numStashEntries).map(i => matchesOldA(i) & ~(matchesOldD(i) | matches1CycAgoD(i)))).asUInt.orR & io.isReInsertingA // for stash re-inserting, so if it is a hit, it must be an old entry.
 	// for alloc matching stage
-	io.matchingLastValidIdxA := MuxCase(Mux1H(matches1CycAgoA, tags.map(x => x.lastValidIdx)), Array(successiveMatch -> io.inLastValidIdx.bits, forwardedToMatchA -> forwardedInLastValidIndex))
+	io.matchingLastValidIdxA := MuxCase(Mux1H(matches1CycAgoA, tags.map(x => x.lastValidIdx)), Array(successiveMatchA -> io.inLastValidIdx.bits, forwardedToMatchA -> forwardedInLastValidIndexA))
 	io.matchingLastTableIdxA := Mux1H(matches1CycAgoA, tags.map(x => x.lastTableIdx))
 	// io.matchingEntryNoA      := OHToUInt((0 until numStashEntries).map(i => matches1CycAgoA(i)))
 	io.hitA                  := matches1CycAgoA.orR
 	// for dealloc matching stage
-	io.matchingLastValidIdxD := MuxCase(Mux1H(matches1CycAgoD, tags.map(x => x.lastValidIdx)), Array(successiveMatch -> io.inLastValidIdx.bits, forwardedToMatchD -> forwardedInLastValidIndex))
+	io.matchingLastValidIdxD := MuxCase(Mux1H(matches1CycAgoD, tags.map(x => x.lastValidIdx)), Array(successiveMatchD -> io.inLastValidIdx.bits, forwardedToMatchD -> forwardedInLastValidIndexD))
 	// io.matchingEntryNoD      := OHToUInt((0 until numStashEntries).map(i => matches1CycAgoD(i)))
 	io.hitD                  := matches1CycAgoD.orR
 	// hazard and stall
@@ -815,16 +813,20 @@ class InCacheMSHRStash(genTag: UniTag, lastTableIdxWidth: Int, genSub: SubentryL
 	io.hazardMatchAMatchD := (RegEnable(Vec(matchesD.zip(deallocAfterUndoneReinsert).map(x => (x._1 | x._2) & io.pipelineReadyD)).asUInt, enable=io.pipelineReady1D) & matches1CycAgoA).orR
 	// io.hazardWriteDMatchA := (matches1CycAgoA & matches2CycAgoD).asUInt.orR
 	// io.hazardWriteAMatchD := (matches1CycAgoD & matches2CycAgoA).asUInt.orR
-	// io.hazardWriteAWriteD := reinsertWriteValid & RegEnable(io.hitD, enable=io.pipelineReady2A, init=false.B)
+	io.hazardWriteAWriteD := reinsertWriteValid & RegEnable(io.hitD & io.pipelineReady1D, enable=io.pipelineReady2D, init=false.B)
+	io.hazardEvictAWriteA := io.inVictimSubNo.valid & io.inLastValidIdx.valid
 	// indicate victim idx
 	io.newVictimNo := OHToUInt(emptyEntrySelect)
 	// entry counter
 	io.count := count
 
-	io.reinsertSublineA.zip(subentries).foreach { case(o, s) => o := s.read(matchNo2CycAgoA) }
-	io.matchingSublineD.zip(subentries).foreach { case(o, s) => o := s.read(matchNo2CycAgoD) }
-	// io.matchingSubline.zip(subentries).foreach { case(o, s) => o := s.read(Mux(reinsertWriteValid & io.pipelineReady2A, matchNo2CycAgoA, matchNo2CycAgoD)) }
+	// io.reinsertSublineA.zip(subentries).foreach { case(o, s) => o := s.read(matchNo2CycAgoA) }
+	// io.matchingSubline.zip(subentries).foreach { case(o, s) => o := s.read(matchNo2CycAgoD) }
+	io.matchingSubline.zip(subentries).foreach { case(o, s) => o := s(Mux(reinsertWriteValid & io.pipelineReady2A, matchNo2CycAgoA, matchNo2CycAgoD)) }
 
+	io.outToPipeline.valid  := outArbiter.io.out.valid
+	io.outToPipeline.bits   := outArbiter.io.out.bits
+	outArbiter.io.out.ready := io.outToPipeline.ready
 
 	for (i <- 0 until numStashEntries) {
 		// dealloc lookup might deallocate the incoming victim
@@ -864,17 +866,13 @@ class InCacheMSHRStash(genTag: UniTag, lastTableIdxWidth: Int, genSub: SubentryL
 	}
 
 	for (i <- 0 until genSub.entriesPerLine) {
-		when (io.inVictimSubNo.valid & io.inVictimSubMask(i) & io.pipelineReady3A) {
-			subentries(i).write(io.inVictimSubNo.bits, io.inVictimSubline(i))
-		}
-		when (io.inLastValidIdx.valid & io.inSublineMask(i) & io.pipelineReady2A) {
-			subentries(i).write(matchNo2CycAgoA, io.inSubline)
+		val evictedSubIn = io.inVictimSubNo.valid & io.inVictimSubMask(i) & io.pipelineReady3A
+		val hitNewSubIn = io.inLastValidIdx.valid & io.inSublineMask(i) & io.pipelineReady2A
+		when (evictedSubIn | hitNewSubIn) {
+			subentries(i)(Mux(evictedSubIn, io.inVictimSubNo.bits, matchNo2CycAgoA)) := Mux(evictedSubIn, io.inVictimSubline(i), io.inSubline)
 		}
 	}
 
-	io.outToPipeline.valid  := outArbiter.io.out.valid
-	io.outToPipeline.bits   := outArbiter.io.out.bits
-	outArbiter.io.out.ready := io.outToPipeline.ready
 }
 
 class StoreToLoadForwardingDualPPL[T <: Data](gen: T = StoreToLoadForwarding.defaultType, addrWidth: Int = StoreToLoadForwarding.defaultAddrWidth) extends Module {

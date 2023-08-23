@@ -26,7 +26,7 @@ class Subentry(offsetWidth: Int, idWidth: Int) extends Bundle {
 }
 
 class SubentryWithPadding(offsetWidth: Int, idWidth: Int, paddingWidth: Int) extends Subentry(offsetWidth, idWidth) {
-	val padding = UInt(paddingWidth.W)
+	val padding = if (paddingWidth == 0) None else UInt(paddingWidth.W)
 	override def cloneType = (new SubentryWithPadding(offsetWidth, idWidth, paddingWidth)).asInstanceOf[this.type]
 }
 
@@ -60,9 +60,9 @@ object SubentryLineWithNoPadding {
 		// out.lastValidIdx := this.lastValidIdx
 		// out.padding      := DontCare
 		out.entries.zip(raw).map(x => {
-			x._1.offset  := x._2.offset
-			x._1.id      := x._2.id
-			x._1.padding := DontCare
+			x._1        := DontCare
+			x._1.offset := x._2.offset
+			x._1.id     := x._2.id
 		})
 		out.entries
 	}
@@ -79,9 +79,9 @@ class SubentryLineWithNoPadding(val offsetWidth: Int, val idWidth: Int, val entr
 		// out.lastValidIdx := this.lastValidIdx
 		// out.padding      := DontCare
 		out.entries.zip(this.entries).map(x => {
-			x._1.offset  := x._2.offset
-			x._1.id      := x._2.id
-			x._1.padding := DontCare
+			x._1        := DontCare
+			x._1.offset := x._2.offset
+			x._1.id     := x._2.id
 		})
 		out
 	}
