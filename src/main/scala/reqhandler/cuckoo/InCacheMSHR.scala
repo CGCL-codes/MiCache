@@ -16,6 +16,7 @@ object InCacheMSHR {
 	val pplWrLen = 3
 	val respQueueDepth = 6
 	val respGenQueueDepth = 32
+	val subentryAlignWidth = 9
 }
 
 class InCacheMSHR(
@@ -37,9 +38,13 @@ class InCacheMSHR(
 	val tagWidth = addrWidth - offsetWidth
 	val numMSHRTotal = numMSHRPerHashTable * numHashTables
 
+	val bramPortWidthAlignment = InCacheMSHR.subentryAlignWidth * 2 // BRAM18 provides 2-byte-wide ports
+	val bram18Count = (memDataWidth / bramPortWidthAlignment) + (if (memDataWidth % bramPortWidthAlignment == 0) 0 else 1)
+	val bramPortWidth = bram18Count * bramPortWidthAlignment
+	val bramPortType = UInt((bram18Count * bramPortWidthAlignment).W)
+
 	val cacheDataType = UInt(memDataWidth.W)
-	val subentryAlignWidth = 8
-	val subentryLineType = new SubentryLine(memDataWidth, offsetWidth, idWidth, numSubentriesPerRow, subentryAlignWidth)
+	val subentryLineType = new SubentryLine(bramPortWidth, offsetWidth, idWidth, numSubentriesPerRow, InCacheMSHR.subentryAlignWidth)
 	val subLineNoPaddingType = new SubentryLineWithNoPadding(offsetWidth, idWidth, subentryLineType.entriesPerLine)
 	val numEntriesPerLine = subentryLineType.entriesPerLine
 	val tagType = new UniTag(tagWidth, subentryLineType.lastValidIdxWidth)
@@ -220,7 +225,7 @@ class InCacheMSHR(
 	/* Memories instantiation and interconnection */
 	/* Memories are initialized with all zeros, which is fine for us since all the valids will be false */
 	val tagMems = Array.fill(numHashTables)(Module(new XilinxTrueDualPortReadFirstBRAM(width=tagType.getWidth, depth=numMSHRPerHashTable)).io)
-	val dataMem = Module(new XilinxTDPReadFirstByteWriteBRAM(width=memDataWidth, depth=numMSHRTotal, byteWriteWidth=subentryAlignWidth)).io
+	val dataMem = Module(new XilinxTDPReadFirstByteWriteBRAM(width=bramPortWidth, depth=numMSHRTotal, byteWriteWidth=InCacheMSHR.subentryAlignWidth)).io
 	val storeToLoads = Array.fill(numHashTables)(Module(new StoreToLoadForwardingDualPPL(tagType, hashTableAddrWidth)).io)
 
 	/* Pipeline reading stage */
@@ -387,13 +392,13 @@ class InCacheMSHR(
 		x.id     := pplAllocWrite.id
 	})
 	val updateEntryOH = UIntToOH(updatedAllocTag.lastValidIdx)
-	val updateWrEnPortA = Wire(Vec(memDataWidth / subentryAlignWidth, Bool()))
+	val updateWrEnPortA = Wire(Vec(bramPortWidth / InCacheMSHR.subentryAlignWidth, Bool()))
 	for (i <- 0 until subentryLineType.entriesPerLine) {
 		for (j <- 0 until subentryLineType.entryBytes) {
 			updateWrEnPortA(i * subentryLineType.entryBytes + j) := (updateEntryOH(i) | pplAllocWrite.isFromStash) & ~delayedCacheHit(0)
 		}
 	}
-	for (i <- subentryLineType.entriesPerLine * subentryLineType.entryBytes until memDataWidth / subentryAlignWidth) {
+	for (i <- subentryLineType.entriesPerLine * subentryLineType.entryBytes until bramPortWidth / InCacheMSHR.subentryAlignWidth) {
 		updateWrEnPortA(i) := false.B
 	}
 	stash.io.inSubline     := updatedSubentryLine.withNoPadding().entries(0)
@@ -472,7 +477,7 @@ class InCacheMSHR(
 	dataMem.reset := reset
 	// alloc
 	dataMem.addra  := Cat(OHToUInt(tableAllocSel), Mux1H(tableAllocSel, storeToLoads.map(x => x.wrAddrWriteA)))
-	dataMem.dina   := Mux(pplAllocWrite.isFromStash, SubentryLineWithNoPadding.addPadding(stash.io.matchingSubline, subentryLineType).asTypeOf(cacheDataType), updatedSubentryLine.asTypeOf(cacheDataType))
+	dataMem.dina   := Mux(pplAllocWrite.isFromStash, SubentryLineWithNoPadding.addPadding(stash.io.matchingSubline, subentryLineType).asTypeOf(bramPortType), updatedSubentryLine.asTypeOf(bramPortType))
 	dataMem.ena    := allocPplWriteReady & pplAllocWrite.valid & (~stashAllocWrEn | pplAllocWrite.isFromStash)
 	dataMem.regcea := allocPplRespReady & (delayedEvict(1) | delayedCacheHit(1))
 	dataMem.wea    := updateWrEnPortA.asUInt
@@ -484,14 +489,14 @@ class InCacheMSHR(
 	dataMem.dinb   := inputDataQueue.io.deq.bits
 	dataMem.enb    := deallocPplWriteReady
 	dataMem.regceb := deallocPplRespReady
-	val updateWrEnPortB = Wire(Vec(memDataWidth / subentryAlignWidth, Bool()))
+	val updateWrEnPortB = Wire(Vec(bramPortWidth / InCacheMSHR.subentryAlignWidth, Bool()))
 	dataMem.web    := updateWrEnPortB.asUInt
 	for (i <- 0 until subentryLineType.entriesPerLine) {
 		for (j <- 0 until subentryLineType.entryBytes) {
 			updateWrEnPortB(i * subentryLineType.entryBytes + j) := pplDeallocWrite.valid & bramDeallocWrEn & deallocPplWriteReady
 		}
 	}
-	for (i <- subentryLineType.entriesPerLine * subentryLineType.entryBytes until memDataWidth / subentryAlignWidth) {
+	for (i <- subentryLineType.entriesPerLine * subentryLineType.entryBytes until bramPortWidth / InCacheMSHR.subentryAlignWidth) {
 		updateWrEnPortB(i) := pplDeallocWrite.valid & bramDeallocWrEn & deallocPplWriteReady
 	}
 

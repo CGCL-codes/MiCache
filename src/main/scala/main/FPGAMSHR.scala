@@ -5,7 +5,7 @@ import chisel3.util._
 import fpgamshr.util.{DReg, ElasticBuffer, BaseReorderBufferAXI, ReorderBufferAXI, DummyReorderBufferAXI, ReorderBufferIO}
 import fpgamshr.interfaces._
 import fpgamshr.crossbar.{Crossbar, MultilayerCrossbar}
-import fpgamshr.reqhandler.cuckoo.{RequestHandlerCuckoo, RequestHandlerBase}
+import fpgamshr.reqhandler.cuckoo.{RequestHandlerCuckoo, RequestHandlerBase, InCacheMSHR}
 import fpgamshr.reqhandler.traditional.{RequestHandlerBlockingCache, RequestHandlerTraditionalMSHR}
 import fpgamshr.extmemarbiter.{InOrderHybridArbiter, ExternalMemoryArbiterBase}
 import fpgamshr.profiling.{Profiling, ProfilingCounter, ProfilingInterface, ProfilingSelector}
@@ -108,14 +108,19 @@ ${if (FPGAMSHR.sameHashFunction) "_nocuckoo" else ""}
 _mp${FPGAMSHR.numMemoryPorts}""".replace("\n", "") + (if(FPGAMSHR.useROB) "_rob" else "") + (if(Profiling.enable) "" else "_noprof") + "_uni_dual"
 
 	def calSubentryPerLine(): Int = {
+		val bramPortWidthAlignment = InCacheMSHR.subentryAlignWidth * 2 // BRAM18 provides 2-byte-wide ports
+		val bram18Count = (FPGAMSHR.memDataWidth / bramPortWidthAlignment) + (if (FPGAMSHR.memDataWidth % bramPortWidthAlignment == 0) 0 else 1)
+		val bramPortWidth = bram18Count * bramPortWidthAlignment
+		println(s"BRAM18 count = ${bram18Count}, BRAM port width = ${bramPortWidth}")
+
 		val idWidth = FPGAMSHR.reqIdWidth + log2Ceil(FPGAMSHR.numInputs)
 		val offsetWidth = log2Ceil(FPGAMSHR.memDataWidth / FPGAMSHR.reqDataWidth)
-		val aligned = roundUp(offsetWidth + idWidth, 8)
-		val max = FPGAMSHR.memDataWidth / aligned
-		val maxIdxWidth = log2Ceil(max)
-		val exceeded = max * (offsetWidth + idWidth) + roundUp(maxIdxWidth, 8) > FPGAMSHR.memDataWidth
-		println(s"max entry count=${max}, max index width=${maxIdxWidth}, lineWidth=${FPGAMSHR.memDataWidth}, offsetWidth=${offsetWidth}, idWidth=${idWidth}")
-		val entriesPerLine = if (exceeded) max - 1 else max
+		val aligned = roundUp(offsetWidth + idWidth, InCacheMSHR.subentryAlignWidth)
+		val entriesPerLine = bramPortWidth / aligned
+		val idxWidth = log2Ceil(entriesPerLine)
+		// val exceeded = max * (offsetWidth + idWidth) + roundUp(maxIdxWidth, 8) > FPGAMSHR.memDataWidth
+		println(s"max entry count=${entriesPerLine}, max index width=${idxWidth}, lineWidth=${bramPortWidth}, offsetWidth=${offsetWidth}, idWidth=${idWidth}")
+		// val entriesPerLine = if (exceeded) max - 1 else max
 		entriesPerLine
 	}
 
@@ -179,6 +184,7 @@ class FPGAMSHR extends Module {
 		val pe_running = Vec(FPGAMSHR.numInputs, Input(Bool()))
 		val pe_done = Vec(FPGAMSHR.numInputs, Input(Bool()))
 		val pe_all_running = Output(Bool())
+		val reset_out = Output(Bool())
 		// val clock2x = Input(Clock())
 	})
 
@@ -197,6 +203,7 @@ class FPGAMSHR extends Module {
 	- bit 2: invalidate if write 1
 	Address 8: log2CacheSizeReduction
 	Address 16: maxUsedMSHRs
+	Address 24: aux_reset_in
 	*/
 	/* TODO: rename axiProfiling to axiControl */
 	val inputProfilingWriteDataEb = Module(new ElasticBuffer(io.axiProfiling.WDATA.cloneType))
@@ -224,6 +231,7 @@ class FPGAMSHR extends Module {
 	val numMSHRTotal = FPGAMSHR.numHashTables * FPGAMSHR.numMSHRPerHashTable
 	val maxAllowedMSHRs = RegInit((numMSHRTotal * (1 - FPGAMSHR.mshrAlmostFullRelMargin)).toInt.U)
 	val maxAllowedSubentries = RegInit((1 << FPGAMSHR.subentryAddrWidth).U)
+	val resetCycleConut = RegInit(0.U(8.W))
 	when (dataAddrAvailable & (inputProfilingWriteAddrEb.io.out.bits === 0.U) & inputProfilingWriteStrbEb.io.out.bits.asUInt.andR) {
 		when (inputProfilingWriteDataEb.io.out.bits(3) === 1.U) {
 			enableCache := true.B
@@ -233,6 +241,7 @@ class FPGAMSHR extends Module {
 	}
 	if (FPGAMSHR.cacheSizeReductionWidth > 0) {
 		when (dataAddrAvailable & (inputProfilingWriteAddrEb.io.out.bits === 1.U) & inputProfilingWriteStrbEb.io.out.bits.asUInt.andR) {
+		// when (dataAddrAvailable & (inputProfilingWriteAddrEb.io.out.bits === 1.U)) {
 			log2CacheSizeReduction := inputProfilingWriteDataEb.io.out.bits(FPGAMSHR.cacheSizeReductionWidth-1, 0)
 		}
 	} else {
@@ -243,9 +252,38 @@ class FPGAMSHR extends Module {
 			maxAllowedMSHRs := inputProfilingWriteDataEb.io.out.bits(log2Ceil(numMSHRTotal)-1, 0)
 		}
 		when (dataAddrAvailable & (inputProfilingWriteAddrEb.io.out.bits === 3.U) & inputProfilingWriteStrbEb.io.out.bits.asUInt.andR) {
-			maxAllowedSubentries := inputProfilingWriteDataEb.io.out.bits(FPGAMSHR.subentryAddrWidth, 0)
+		// when (dataAddrAvailable & (inputProfilingWriteAddrEb.io.out.bits === 3.U)) {
+			// maxAllowedSubentries := inputProfilingWriteDataEb.io.out.bits(FPGAMSHR.subentryAddrWidth, 0)
+			resetCycleConut := inputProfilingWriteDataEb.io.out.bits
 		}
 	}
+
+	val sNormal :: sWaitAxiResp :: sResetting :: Nil = Enum(3)
+	val resetState = RegInit(sNormal)
+	val waitAxiRespCounter = RegInit(0.U(8.W))
+	switch (resetState) {
+		is (sNormal) {
+			when (resetCycleConut > 0.U) {
+				resetState := sWaitAxiResp
+				waitAxiRespCounter := 255.U
+			}
+		}
+		is (sWaitAxiResp) {
+			when (waitAxiRespCounter === 0.U) {
+				resetState := sResetting
+			} .otherwise {
+				waitAxiRespCounter := waitAxiRespCounter - 1.U
+			}
+		}
+		is (sResetting) {
+			when (resetCycleConut === 0.U) {
+				resetState := sNormal
+			} .otherwise {
+				resetCycleConut := resetCycleConut - 1.U
+			}
+		}
+	}
+	io.reset_out := resetState === sResetting
 
 	/* Input address structure:
 	-----------------------------------------------------------------------------
