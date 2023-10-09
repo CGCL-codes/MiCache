@@ -104,6 +104,7 @@ class SubentryLineWithNoPadding(val offsetWidth: Int, val idWidth: Int, val entr
 // }
 
 class StashVictimInIO(val tagWidth: Int, val lastValidIdxWidth: Int, val lastTableIdxWidth: Int) extends Bundle with HasTag with HasLastTableIdx {
+	val isSubFull = Bool()
 	val lastValidIdx = UInt(lastValidIdxWidth.W)
 	override def cloneType = (new StashVictimInIO(tagWidth, lastValidIdxWidth, lastTableIdxWidth)).asInstanceOf[this.type]
 }
@@ -118,6 +119,7 @@ class StashEntry(val tagWidth: Int, val lastValidIdxWidth: Int, val lastTableIdx
 extends Bundle with HasValid with HasTag with HasLastTableIdx {
 	val inPipeline = Bool()
 	val subTransit = Bool()
+	val subFull = Bool()
 	val lastValidIdx = UInt(lastValidIdxWidth.W)
 	// val sub = new SubentryLineWithNoPadding(subGen.offsetWidth, subGen.idWidth, subGen.entriesPerLine)
 	override def cloneType = (new StashEntry(tagWidth, lastValidIdxWidth, lastTableIdxWidth)).asInstanceOf[this.type]
@@ -126,6 +128,7 @@ extends Bundle with HasValid with HasTag with HasLastTableIdx {
 		m.valid := false.B
 		m.inPipeline := DontCare
 		m.subTransit := DontCare
+		m.subFull := DontCare
 		m.tag := DontCare
 		m.lastValidIdx := DontCare
 		m.lastTableIdx := DontCare
