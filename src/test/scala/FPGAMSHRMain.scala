@@ -59,8 +59,8 @@ class FPGAMSHRModelBuilder extends ModuleBuilder(".") {
       () => new FPGAMSHR(),
       CoreDefinition(
         name    = FPGAMSHR.ipName,
-        vendor  = "LAP",
-        library = "FPGAMSHR",
+        vendor  = "CGCL",
+        library = "MiCache",
         version = FPGAMSHR.version.toString,
         CoreDefinition.root(FPGAMSHR.ipName)
       )

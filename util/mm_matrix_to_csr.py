@@ -44,18 +44,18 @@ elif file_ext == '.pickle':
         matrix = pickle.load(f)
 else:
     raise RuntimeError('input_file must either be an .mtx or a .pickle file.')
-print("Imported {} matrix with {} non-zero elements\n".format(matrix.shape, len(matrix.data)))
+print("Imported {} matrix with {} non-zero elements".format(matrix.shape, len(matrix.data)))
 if args.interleaved:
-    root_folder_name = os.path.splitext(os.path.basename(args.input_file))[0][0:8]
+    root_folder_name = os.path.splitext(os.path.basename(args.input_file))[0]
 else:
-    root_folder_name = os.path.splitext(os.path.basename(args.input_file))[0][0:7] + 'b'
+    root_folder_name = os.path.splitext(os.path.basename(args.input_file))[0] + '_blocked'
 acc_range = [int(x) for x in args.acc.split('..')]
 if len(acc_range) == 0:
     acc_range.append(acc_range[0])
 for acc_count in range(acc_range[0], acc_range[1]+1):
     full_folder_path = os.path.join(root_folder_name, str(acc_count))
     os.makedirs(full_folder_path, exist_ok=True)
-    print("Creating folder {}\n".format(full_folder_path))
+    print("Creating folder {}".format(full_folder_path))
 
     interleaved_rowptr = [[0] for i in range(acc_count)]
     interleaved_data = [[] for i in range(acc_count)]
@@ -86,42 +86,42 @@ for acc_count in range(acc_range[0], acc_range[1]+1):
     for acc, this_rowptr, this_data, this_cols in zip(range(acc_count), interleaved_rowptr, interleaved_data, interleaved_col_ind):
         if args.split:
             val_file_name = '{}.val'.format(acc)
-            print("Creating file {}\n".format(os.path.join(full_folder_path, val_file_name)))
+            print("Creating file {}".format(os.path.join(full_folder_path, val_file_name)))
             with open(os.path.join(full_folder_path, val_file_name), 'wb') as f:
-                f.write(struct.pack("I", len(this_data)))
+                # f.write(struct.pack("I", len(this_data)))
                 for val in this_data:
                     f.write(struct.pack("f", val))
             col_file_name = '{}.col'.format(acc)
-            print("Creating file {}\n".format(os.path.join(full_folder_path, col_file_name)))
+            print("Creating file {}".format(os.path.join(full_folder_path, col_file_name)))
             with open(os.path.join(full_folder_path, col_file_name), 'wb') as f:
-                f.write(struct.pack("I", len(this_data)))
+                # f.write(struct.pack("I", len(this_data)))
                 for col in this_cols:
                     f.write(struct.pack("I", col))
         else:
             val_col_file_name = '{}.dat'.format(acc)
-            print("Creating file {}\n".format(os.path.join(full_folder_path, val_col_file_name)))
+            print("Creating file {}".format(os.path.join(full_folder_path, val_col_file_name)))
             with open(os.path.join(full_folder_path, val_col_file_name), 'wb') as f:
-                f.write(struct.pack("I", len(this_data)))
+                # f.write(struct.pack("I", len(this_data)))
                 for val, col in zip(this_data, this_cols):
                     # f.write('{:x}'.format(struct.unpack("I", struct.pack("f", val))[0]) + ' ' + str(col) + '\n')
                     f.write(struct.pack("fI", val, col))
 
         row_ptr_file_name = '{}.row'.format(acc)
-        print("Creating file {}\n".format(os.path.join(full_folder_path, row_ptr_file_name)))
+        print("Creating file {}".format(os.path.join(full_folder_path, row_ptr_file_name)))
         with open(os.path.join(full_folder_path, row_ptr_file_name), 'wb') as f:
-            f.write(struct.pack("I", len(this_rowptr)))
+            # f.write(struct.pack("I", len(this_rowptr)))
             for rowptr in this_rowptr:
                 # f.write(str(rowptr) + '\n')
                 f.write(struct.pack("I", rowptr))
 
     if args.vec:
-        print("Generating random vector of size {}\n".format(matrix.shape[1]))
+        print("Generating random vector of size {}".format(matrix.shape[1]))
         vect = numpy.random.rand(matrix.shape[1])
 
         vect_file_name = '{}.vec'.format(root_folder_name)
-        print("Creating file {}\n".format(os.path.join(full_folder_path, vect_file_name)))
+        print("Creating file {}".format(os.path.join(full_folder_path, vect_file_name)))
         with open(os.path.join(full_folder_path, vect_file_name), 'wb') as f:
-            f.write(struct.pack("I", matrix.shape[1]))
+            # f.write(struct.pack("I", matrix.shape[1]))
             for val in vect:
                 # f.write('{:x}'.format(struct.unpack("I", struct.pack("f", val))[0]) + '\n')
                 f.write(struct.pack("f", val))
@@ -130,8 +130,8 @@ for acc_count in range(acc_range[0], acc_range[1]+1):
         split_res = [mat * vect for mat in split_matrices]
         for acc, this_res in enumerate(split_res):
             res_file_name = '{}.exp'.format(acc)
-            print("Creating file {}\n".format(os.path.join(full_folder_path, res_file_name)))
+            print("Creating file {}".format(os.path.join(full_folder_path, res_file_name)))
             with open(os.path.join(full_folder_path, res_file_name), 'wb') as f:
-                f.write(struct.pack("I", len(this_res)))
+                # f.write(struct.pack("I", len(this_res)))
                 for val in this_res:
                     f.write(struct.pack("f", val))

@@ -109,7 +109,6 @@ class RequestHandlerCuckoo(reqAddrWidth: Int=RequestHandler.reqAddrWidth, reqDat
   mshrManager.io.deallocIn.bits.addr := Cat(inMemRespEb.bits.addr, 0.U(offsetWidth.W))
   inMemRespEb.ready := mshrManager.io.deallocIn.ready
 
-  // mshrManager.io.outMem <> io.outMemReq
   mshrManager.io.outMem <> io.outMemReq
   mshrManager.io.maxAllowedMSHRs := io.maxAllowedMSHRs
   mshrManager.io.invalidate := io.invalidate

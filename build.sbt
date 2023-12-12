@@ -24,7 +24,7 @@ def javacOptionsVersion(scalaVersion: String): Seq[String] = {
   }
 }
 
-name := "mshr-rich"
+name := "mshr-inclusive"
 
 version := "3.0.0"
 

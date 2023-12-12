@@ -95,7 +95,7 @@ numMemoryPorts=${numMemoryPorts}
 
 	}
 
-	def ipName(): String = s"""FPGAMSHR_ra${FPGAMSHR.reqAddrWidth}
+	def ipName(): String = s"""MiCache_ra${FPGAMSHR.reqAddrWidth}
 _id${FPGAMSHR.reqIdWidth}
 _in${FPGAMSHR.numInputs}
 _bk${FPGAMSHR.numReqHandlers}
@@ -105,7 +105,7 @@ _mshr${FPGAMSHR.numMSHRPerHashTable}
 _st${if(FPGAMSHR.numHashTables > 0) FPGAMSHR.mshrAssocMemorySize else 0}
 _se${if(FPGAMSHR.numSubentriesPerRow == 0) FPGAMSHR.calSubentryPerLine() else FPGAMSHR.numSubentriesPerRow}
 ${if (FPGAMSHR.sameHashFunction) "_nocuckoo" else ""}
-_mp${FPGAMSHR.numMemoryPorts}""".replace("\n", "") + (if(FPGAMSHR.useROB) "_rob" else "") + (if(Profiling.enable) "" else "_noprof") + "_uni_dual_sfsq"
+_mp${FPGAMSHR.numMemoryPorts}""".replace("\n", "") + (if(FPGAMSHR.useROB) "_rob" else "") + (if(Profiling.enable) "" else "_noprof")
 
 	def calSubentryPerLine(): Int = {
 		val bramPortWidthAlignment = InCacheMSHR.subentryAlignWidth * 2 // BRAM18 provides 2-byte-wide ports

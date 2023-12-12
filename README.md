@@ -1,18 +1,44 @@
-# An in-cache MSHR (or called MSHR-inclusive cache) design (Chisel version)
+# MiCache: An MSHR-inclusive non-blocking cache design for FPGAs
 
-This is based on the MSHR-rich MOMS from [FPGA'19: Stop Crying Over Your Cache Miss Rate](https://github.com/m-asiatici/MSHR-rich). We simply merge the cache buffer and MSHR buffer to share the storage resource for the MSHR-rich design. The effect remains unknown so far, but intuitively some resource savings are foreseeable.
-The current implement only verifies the functionality of the in-cache MSHR storage and doesn't consider any optimization (such as the timing problem).
+MiCache is developed by revising the Chisel codes of [MSHR-rich](https://github.com/m-asiatici/MSHR-rich). We replace the original `Cache`, `MSHR` and `SubentryBuffer` modules with our proposed MSHR-inclusive architecture (the major codes are in [InCacheMSHR.scala](/src/main/scala/reqhandler/cuckoo/InCacheMSHR.scala)). Based on the key idea of building a large number of MSHRs, we implements MSHRs and cache lines in shared storage spaces, and allow the entries to switch between these two forms. By doing so, MiCache is able to support the dynamic requirements of MSHRs during the executions of applications.
+
+However, there are still a few unknown bugs in our codes which may result in failures in some of the tests on FPGAs. We are trying our best to locate the bugs.
+
+## Requirements
+The compiling environments are the same as in [MSHR-rich](https://github.com/m-asiatici/MSHR-rich).
++ Chisel 3
++ sbt
++ Python3
++ Xilinx Vivado
++ Xilinx QDMA driver
+
+We tested our design with the environments listed below:
++ Xilinx Alevo U280 board
++ Ubuntu 18.04
++ Vivado 2020.2
++ QDMA driver 2020.2
 
 ## Usage
 To build the vivado IP, run:
 ```bash
-make ip cfg=CONFIG_FILE
+$ make ip cfg=CONFIG_FILE
 ```
-The example configuration files are in `cfg/`. Read the FPGA'19 paper for configuration details. The output IPs are in `output/ip/`.
-
 To generate verilog file, run:
 ```bash
-make verilog cfg=CONFIG_FILE
+$ make verilog cfg=CONFIG_FILE
+```
+The configuration files of our evaluations in the paper are in `cfg/`. The output IPs are in `output/ip/`.
+
+(TODO) To generate the example vivado project, run:
+```bash
+# TODO
 ```
 
-See the original [README](./README_origin.md) for other detail information.
+Run the following commands to compile the host program.
+```bash
+$ cd sw
+$ make inclusive
+# The QDMA driver must be loaded before executing the test.
+$ sudo ./spmvtest [QDMA_DEVICE_PATH] [BENCHMARK_MATRIX_PATH]
+```
+The format of the matrices is the same as in [MSHR-rich](https://github.com/m-asiatici/MSHR-rich).
