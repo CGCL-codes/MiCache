@@ -7,8 +7,7 @@ The major changes are on modules `Cache`, `MSHR`, and `SubentryBuffer` (in file 
 However, there is still a bug in the current implementation:  
 >When an MSHR in the stash is frequently operated, this bug may cause the subentry counter or the content of some of the subentries to have wrong value, which leads to the corresponding requests from the PE not being responded correctly. This further leads to the sliding window of the out-of-order memory accessor in the PE not being able to advance due to the unanswered requests, thus causing the system frozen.
 
-When configured with 4 cache-MSHR banks with 64 KB capacity each, this bug occurs with approximately a 90% probability on ljournal-2008, and 50% on other tested matrices.  
-When configured with 4 cache-MSHR banks with 128 KB capacity each, this bug occurs with approximately a 50% probability on ljournal-2008, and 15% on other tested matrices.  
+When configured with 4 cache-MSHR banks with 64 KB capacity each, this bug occurs with approximately a 90% probability on ljournal-2008, and 50% on other tested matrices. When configured with 4 cache-MSHR banks with 128 KB capacity each, this bug occurs with approximately a 50% probability on ljournal-2008, and 15% on other tested matrices.  
 On other configurations, this bug hardly occurs.
 
 ## Requirements
