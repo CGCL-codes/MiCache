@@ -1,8 +1,11 @@
 # MiCache: An MSHR-inclusive non-blocking cache design for FPGAs
+This repository contains the full source code of MiCache, an MSHR-inclusive nonblocking cache architecture, where cache entries and MSHR entries share the same storage spaces to support the dynamic requirements of MSHRs during the executions of applications.  
 
-MiCache is developed by revising the Chisel codes of [MSHR-rich](https://github.com/m-asiatici/MSHR-rich). We replace the original `Cache`, `MSHR` and `SubentryBuffer` modules with our proposed MSHR-inclusive architecture (the major codes are in [InCacheMSHR.scala](/src/main/scala/reqhandler/cuckoo/InCacheMSHR.scala)). Based on the key idea of building a large number of MSHRs, we implements MSHRs and cache lines in shared storage spaces, and allow the entries to switch between these two forms. By doing so, MiCache is able to support the dynamic requirements of MSHRs during the executions of applications.
+We implement MiCache by revising the [code](https://github.com/m-asiatici/MSHR-rich) of [MSHR-rich Cache Design](https://dl.acm.org/doi/10.1145/3289602.3293901) \(published in FPGA 2019\).   
+The major changes are on modules `Cache`, `MSHR` and `SubentryBuffer` (in file [InCacheMSHR.scala](/src/main/scala/reqhandler/cuckoo/InCacheMSHR.scala)).
 
-However, there are still a few unknown bugs in our codes which may result in failures in some of the tests on FPGAs. We are trying our best to locate the bugs.
+However, there is still a bug in the current implementation:  
+When an MSHR in the stash is frequently operated, this bug may cause the subentry counter or IDs in some of the subentries to have wrong value, which leads to the corresponding requests from the PE not being responded correctly. This further leads to the sliding window of the out-of-order memory accessor in the PE not being able to advance due to the unanswered requests, thus causing the system frozen.
 
 ## Requirements
 The compiling environments are the same as in [MSHR-rich](https://github.com/m-asiatici/MSHR-rich).
