@@ -5,9 +5,9 @@ We implement MiCache by revising the [code](https://github.com/m-asiatici/MSHR-r
 The major changes are on modules `Cache`, `MSHR`, and `SubentryBuffer` (in file [InCacheMSHR.scala](/src/main/scala/reqhandler/cuckoo/InCacheMSHR.scala)).
 
 However, there is still a bug in the current implementation:  
->When an MSHR in the stash is frequently operated, this bug may cause the subentry counter or the content of some of the subentries to have wrong value, which leads to the corresponding requests from the PE not being responded correctly. This further leads to the sliding window of the out-of-order memory accessor in the PE not being able to advance due to the unanswered requests, thus causing the system frozen.
+>When an MSHR in the stash is frequently operated, this bug may result in incorrect values of the subentry counter or IDs within certain subentries. Consequently, requests from the PE may not receive accurate responses. This, in turn,  hinders the sliding window of the out-of-order memory accessor in PE from advancing, ultimately freezing the system. 
 
-When configured with 4 cache-MSHR banks with 64 KB capacity each, this bug occurs with approximately a 90% probability on ljournal-2008, and 50% on other tested matrices. When configured with 4 cache-MSHR banks with 128 KB capacity each, this bug occurs with approximately a 50% probability on ljournal-2008, and 15% on other tested matrices. On other configurations, this bug hardly occurs.
+When configured with 4 cache-MSHR banks with 64 KB capacity each, this bug occurs with approximately a 95% probability on ljournal-2008, and 50% on other tested matrices. When configured with 4 cache-MSHR banks with 128 KB capacity each, this bug occurs with approximately a 50% probability on ljournal-2008, and 15% on other tested matrices. On other configurations, this bug hardly occurs.
 
 In instances where the bug does not occur, our system works properly, producing correct outputs identical to those computed by the CPU. Besides, the bug dose not affect the performance of the normal runs, and the performance data reported are obtained from these normal runs. 
 
