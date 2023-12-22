@@ -181,9 +181,11 @@ class FPGAMSHR extends Module {
 		val in = Vec(FPGAMSHR.numInputs, new AXI4FullReadOnly(UInt(FPGAMSHR.reqDataWidth.W), FPGAMSHR.reqAddrWidth, FPGAMSHR.reqIdWidth))
 		val out = Flipped(Vec(FPGAMSHR.numMemoryPorts, new AXI4FullReadOnly(UInt(FPGAMSHR.memDataWidth.W), FPGAMSHR.memAddrWidth, FPGAMSHR.memIdWidth)))
 		val axiProfiling = new AXI4Lite(UInt(Profiling.dataWidth.W), totalProfilingAddrWidth)
+		// for cycle counter control 
 		val pe_running = Vec(FPGAMSHR.numInputs, Input(Bool()))
 		val pe_done = Vec(FPGAMSHR.numInputs, Input(Bool()))
 		val pe_all_running = Output(Bool())
+		// for aux_reset
 		val reset_out = Output(Bool())
 		// val clock2x = Input(Clock())
 	})
