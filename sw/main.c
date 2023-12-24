@@ -745,13 +745,12 @@ int main(int argc, char *argv[])
 	uint32_t total_cache_size = (CACHE_SIZE / 1024) * NUM_REQ_HANDLERS; // KB
 	uint32_t total_MSHR_number = MSHR_PER_HASH_TABLE * MSHR_HASH_TABLES * NUM_REQ_HANDLERS;
 	num_spmv = NUM_SPMV;
-	// num_spmv = 1;
 
 	FPGAMSHR_Set_base(fpgamshr_base);
 
 	printf("init DMA\n");
 	#ifdef MSHR_INCLUSIVE
-	FPGAMSHR_BugReset();
+	FPGAMSHR_Reset();
 	#endif
 	init_dma(num_spmv);
 	printf("DMA init done\n");
@@ -776,7 +775,6 @@ int main(int argc, char *argv[])
 		for (cache_divider = 0; cache_divider < CACHE_SIZE_REDUCTION_VALUES; cache_divider++) {
 		// for (MSHR_divider = 2; MSHR_divider < 3; MSHR_divider++) { // for mshr-rich test
 			#ifndef MSHR_INCLUSIVE
-			// MSHR_divider = cache_divider + 1;
 			// MSHR_divider = cache_divider;
 			subRow_divider = MSHR_divider;
 			#else
@@ -810,7 +808,7 @@ int main(int argc, char *argv[])
 				#ifndef MSHR_INCLUSIVE
 				return -1;
 				#else
-				FPGAMSHR_BugReset();
+				FPGAMSHR_Reset();
 				init_dma(num_spmv);
 				fail = 1;
 				retryCount++;

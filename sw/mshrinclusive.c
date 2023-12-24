@@ -5,27 +5,23 @@
 #include <unistd.h>
 #include <limits.h>
 #include "def.h"
+#include "params.h"
 
 #define MEMORY_SPAN					(1 << ADDR_BITS)
 
 #define NUM_INPUTS					4
 #define NUM_MEMPORT					1
 #define ROB_DEPTH					0
+#ifndef PARAMS_H
 #define MSHR_HASH_TABLES			4
 #define MSHR_PER_HASH_TABLE			1024
-#define SE_BUF_ENTRIES_PER_ROW		3
-#define SE_BUF_ROWS					2048
 #define CACHE_WAYS					4
-#define CACHE_SIZE					(262144 * 1)
+#define CACHE_SIZE					262144
 #define CACHE_SIZE_REDUCTION_WIDTH	3
+#define NUM_REQ_HANDLERS			4
+#endif
 #define CACHE_SIZE_REDUCTION_VALUES	(1 << CACHE_SIZE_REDUCTION_WIDTH)
 #define CACHELINE_SIZE				64
-#if FPGAMSHR_EXISTS
-#define NUM_REQ_HANDLERS			4
-// #define NUM_REQ_HANDLERS			8
-#else
-#define NUM_REQ_HANDLERS			0
-#endif
 #define REGS_PER_REQ_HANDLER		512
 #define REGS_PER_REQ_HANDLER_MODULE	256
 
@@ -127,8 +123,9 @@ void FPGAMSHR_SetMaxMSHR(uint64_t mshr) {
 	FPGAMSHR_Write_reg(16, mshr);
 }
 
-void FPGAMSHR_BugReset() {
+void FPGAMSHR_Reset() {
 	FPGAMSHR_Write_reg(24, 8);
+	sleep(1);
 }
 
 void FPGAMSHR_Get_stats_log(const char *benchname) {

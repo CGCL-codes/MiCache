@@ -32,16 +32,18 @@ $ make verilog cfg=CONFIG_FILE
 ```
 The configuration files of our evaluations in the paper are in `cfg/`. The output IPs are in `output/ip/`.
 
-(TODO) To generate the example vivado project, run:
+To generate the example vivado project, run:
 ```bash
-# TODO
+$ make project cfg=CONFIG_FILE
+$ cd output/vivado
+$ vivado -source genprj.tcl
 ```
 
 Run the following commands to compile the host program `spmvtest` for evaluations on U280. 
 We use the Xilinx QDMA IP and to transfer data and control signals between the host and the U280 FPGA through PCIe. This host program is not working on FPGAs like ZYNQ.
 ```bash
-$ cd sw
-$ make inclusive
+$ cd output/sw
+$ make
 # The QDMA driver must be loaded before executing the test.
 $ sudo ./spmvtest [QDMA_DEVICE_PATH] [BENCHMARK_MATRIX_PATH]
 ```

@@ -85,31 +85,24 @@ object FPGAMSHRVivadoBuilder extends App {
   val currentDateTime = s"""${java.time.LocalDate.now.toString} ${java.time.LocalTime.now.format(java.time.format.DateTimeFormatter.ofPattern("kk:mm:ss")).toString}"""
   val tclFile = new MyFileWriter("output/vivado/params.tcl")
   tclFile.write(s"# Generated on ${currentDateTime} with Chisel code version ${FPGAMSHR.version}\n")
-  tclFile.write(s"""set fpgamshr_name "${FPGAMSHR.ipName}"\n""")
-  tclFile.write("set run_compilation 1\n")
+  tclFile.write(s"""set cache_name "${FPGAMSHR.ipName}"\n""")
+  // tclFile.write("set run_compilation 1\n")
   tclFile.close()
   if (! new File("output/sw").exists) {
     "mkdir output/sw" !
   }
   val headerFile = new MyFileWriter("output/sw/params.h")
   headerFile.write(s"// Generated on ${currentDateTime} with Chisel code version ${FPGAMSHR.version}\n")
-  headerFile.write(s"#define ADDR_BITS ${FPGAMSHR.reqAddrWidth}\n")
-  headerFile.write(s"#define MEM_BASE_ADDR 0x${new scala.runtime.RichLong(FPGAMSHR.memAddrOffset).toHexString}\n")
-  headerFile.write(s"#define ROB_DEPTH ${1 << FPGAMSHR.reqIdWidth}\n")
   headerFile.write(s"#define MSHR_HASH_TABLES ${FPGAMSHR.numHashTables}\n")
   headerFile.write(s"#define MSHR_PER_HASH_TABLE ${FPGAMSHR.numMSHRPerHashTable}\n")
-  headerFile.write(s"#define SE_BUF_ENTRIES_PER_ROW ${FPGAMSHR.numSubentriesPerRow}\n")
-  headerFile.write(s"#define SE_BUF_ROWS ${1 << FPGAMSHR.subentryAddrWidth}\n")
   headerFile.write(s"#define CACHE_WAYS ${FPGAMSHR.numCacheWays}\n")
   headerFile.write(s"#define CACHE_SIZE ${FPGAMSHR.cacheSizeBytes}\n")
   headerFile.write(s"#define CACHE_SIZE_REDUCTION_WIDTH ${FPGAMSHR.cacheSizeReductionWidth}\n")
   headerFile.write(s"#define NUM_REQ_HANDLERS ${FPGAMSHR.numReqHandlers}\n")
-  headerFile.write(s"#define REGS_PER_REQ_HANDLER ${1 << (Profiling.regAddrWidth + Profiling.subModuleAddrWidth)}\n")
-  headerFile.write(s"#define REGS_PER_REQ_HANDLER_MODULE ${1 << Profiling.regAddrWidth}\n")
-  headerFile.write(s"#define FPGAMSHR_EXISTS 1\n")
+  headerFile.write(s"#define PARAMS_H\n")
 
   headerFile.close()
-  "cp util/generator.tcl output/vivado" !
+  "cp util/genprj.tcl util/constraint.xdc output/vivado" !
   // copy all files from sw to output/sw
   val f = (new File("sw")).listFiles.map(_.getName)
   for (file <- f) {s"cp sw/$file output/sw" !}

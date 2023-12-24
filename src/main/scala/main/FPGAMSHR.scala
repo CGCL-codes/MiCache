@@ -111,7 +111,7 @@ _mp${FPGAMSHR.numMemoryPorts}""".replace("\n", "") + (if(FPGAMSHR.useROB) "_rob"
 		val bramPortWidthAlignment = InCacheMSHR.subentryAlignWidth * 2 // BRAM18 provides 2-byte-wide ports
 		val bram18Count = (FPGAMSHR.memDataWidth / bramPortWidthAlignment) + (if (FPGAMSHR.memDataWidth % bramPortWidthAlignment == 0) 0 else 1)
 		val bramPortWidth = bram18Count * bramPortWidthAlignment
-		println(s"BRAM18 count = ${bram18Count}, BRAM port width = ${bramPortWidth}")
+		// println(s"BRAM18 count = ${bram18Count}, BRAM port width = ${bramPortWidth}")
 
 		val idWidth = FPGAMSHR.reqIdWidth + log2Ceil(FPGAMSHR.numInputs)
 		val offsetWidth = log2Ceil(FPGAMSHR.memDataWidth / FPGAMSHR.reqDataWidth)
@@ -119,7 +119,7 @@ _mp${FPGAMSHR.numMemoryPorts}""".replace("\n", "") + (if(FPGAMSHR.useROB) "_rob"
 		val entriesPerLine = bramPortWidth / aligned
 		val idxWidth = log2Ceil(entriesPerLine)
 		// val exceeded = max * (offsetWidth + idWidth) + roundUp(maxIdxWidth, 8) > FPGAMSHR.memDataWidth
-		println(s"max entry count=${entriesPerLine}, max index width=${idxWidth}, lineWidth=${bramPortWidth}, offsetWidth=${offsetWidth}, idWidth=${idWidth}")
+		// println(s"max entry count=${entriesPerLine}, max index width=${idxWidth}, lineWidth=${bramPortWidth}, offsetWidth=${offsetWidth}, idWidth=${idWidth}")
 		// val entriesPerLine = if (exceeded) max - 1 else max
 		entriesPerLine
 	}
