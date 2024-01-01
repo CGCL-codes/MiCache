@@ -371,7 +371,7 @@ class InCacheMSHR(
 
 	// dealloc
 	val tableDeallocSel = Wire(Vec(numHashTables, Bool()))
-	val matchDeallocWrEn = RegEnable(Vec(mshrDeallocActualHit.map(x => x & ~stash.io.hitInComingSubFullD)).asUInt, enable=deallocPplWriteReady)
+	val matchDeallocWrEn = RegEnable(Vec(mshrDeallocActualHit.map(x => x & ~stash.io.hitBecomingSubFullD)).asUInt, enable=deallocPplWriteReady)
 	val stashDeallocWrEn = matchDeallocWrEn(numHashTables)
 	val bramDeallocWrEn = tableDeallocSel.asUInt.orR
 	val deallocWrEn = matchDeallocWrEn.orR
@@ -682,7 +682,7 @@ class InCacheMSHRStash(genTag: UniTag, lastTableIdxWidth: Int, genSub: SubentryL
 		// dealloc query result out (with one cycle delay)
 		val hitD                  = Output(Bool())
 		val hitSubFullD           = Output(Bool())
-		val hitInComingSubFullD   = Output(Bool())
+		val hitBecomingSubFullD   = Output(Bool())
 		val matchingLastValidIdxD = Output(stashEntryType.lastValidIdx.cloneType)
 		// matching subentry line for re-insertion and deallocation
 		val matchingSubline       = Output(genSub.entries)
@@ -786,11 +786,12 @@ class InCacheMSHRStash(genTag: UniTag, lastTableIdxWidth: Int, genSub: SubentryL
 	// io.matchingEntryNoD      := OHToUInt((0 until numStashEntries).map(i => matches1CycAgoD(i)))
 	io.hitD                  := matches1CycAgoD.orR
 	io.hitSubFullD           := RegEnable(Vec(matchesSubFullD).asUInt.orR, init=false.B, enable=io.pipelineReady1D)
-	// io.hitInComingSubFullD   := (RegEnable(Vec(matchesNewD.zip(matchesOldD).map(x => x._1 & ~x._2)).asUInt, init=0.U, enable=io.pipelineReady1D) & Vec(subFullSelect).asUInt).orR
-	io.hitInComingSubFullD   := RegEnable(matchIncomingD & io.pipelineReady1A, init=false.B, enable=io.pipelineReady1D) & RegEnable(~Vec(matchesD).asUInt.orR, init=false.B, enable=io.pipelineReady1D) & RegEnable(io.inVictim.bits.lastValidIdx === (genSub.entriesPerLine - 1).U, init=false.B, enable=io.pipelineReady1D)
+	io.hitBecomingSubFullD   := RegEnable(matchIncomingD & (io.inVictim.bits.lastValidIdx === (genSub.entriesPerLine - 1).U) & io.pipelineReady1A, init=false.B, enable=io.pipelineReady1D) & 
+								RegEnable(~Vec(matchesD).asUInt.orR, init=false.B, enable=io.pipelineReady1D) | 
+								RegEnable(Vec(matchesOldD.zip(matchesOldA).map(x => x._1 & x._2)).asUInt.orR & ~Vec(matchesSubFulls).asUInt.orR & matchSubFullA & io.pipelineReadyA, init=false.B, enable=io.pipelineReady1D)
 	// hazard and stall
 	io.hazardSubFullD    := Vec(matchesSubFulls).asUInt.orR
-	io.hazardStashStallA := (Vec(matchesOldA).asUInt & matches1CycAgoD).orR & ~io.isReInsertingA & io.pipelineReady1D
+	io.hazardStashStallA := (Vec(matchesOldA).asUInt & matches1CycAgoD).orR & ~io.isReInsertingA
 	io.hazardMatchStallD := Vec((0 until numStashEntries).map(i => (tags(i).subTransit | (matches2CycAgoA(i) & ~io.pipelineReady2A)) & matches1CycAgoD(i))).asUInt.orR
 	// io.hazardMatchAMatchD := (RegEnable(Vec(matchesRawD.zip(deallocAfterUndoneReinsert).map(x => (x._1 | x._2) & io.pipelineReadyD)).asUInt, enable=io.pipelineReady1D) & matches1CycAgoA).orR
 	io.hazardMatchAMatchD := ((RegEnable(Vec(matchesRawD.map(x => x & io.pipelineReadyD)).asUInt, enable=io.pipelineReady1D) | RegEnable(Vec(deallocAfterUndoneReinsert.map(x => x & io.pipelineReadyD)).asUInt, enable=io.pipelineReady1D)) & matches1CycAgoA).orR
@@ -812,7 +813,7 @@ class InCacheMSHRStash(genTag: UniTag, lastTableIdxWidth: Int, genSub: SubentryL
 
 	for (i <- 0 until numStashEntries) {
 		// dealloc lookup might deallocate the incoming victim
-		when ((matchesOldA(i) & tags(i).inPipeline & ~(matchesOldD(i) | matches1CycAgoD(i)) & io.isReInsertingA & io.pipelineReadyA) | (matches1CycAgoD(i) & ~io.hitInComingSubFullD & io.pipelineReady1D)) {
+		when ((matchesOldA(i) & tags(i).inPipeline & ~(matchesOldD(i) | matches1CycAgoD(i)) & io.isReInsertingA & io.pipelineReadyA) | (matches1CycAgoD(i) & ~io.hitBecomingSubFullD & io.pipelineReady1D)) {
 			tags(i).valid := false.B
 		} .elsewhen (io.inVictim.valid & emptyEntrySelect(i) & io.pipelineReady1A) {
 			tags(i).valid := true.B

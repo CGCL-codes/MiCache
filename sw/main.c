@@ -787,10 +787,7 @@ int main(int argc, char *argv[])
 					benchname, num_spmv, num_hbm_channel, cache_size, MSHR_num, subRow_num);
 			snprintf(logname, sizeof(logname), "%s_%dpe_%upc_%uKB_%uMSHR",
 						benchname, num_spmv, num_hbm_channel, cache_size, MSHR_num);
-			int fail = 1;
-			int retryCount = 0;
-			while (fail) {
-			fail = 0;
+
 			FPGAMSHR_Clear_stats();
 			FPGAMSHR_Invalidate_cache();
 			if (cache_divider == CACHE_SIZE_REDUCTION_VALUES) {
@@ -805,22 +802,10 @@ int main(int argc, char *argv[])
 			}
 
 			if (test_spmv_mult_axis(num_spmv, logname) != 0) {
-				#ifndef MSHR_INCLUSIVE
 				return -1;
-				#else
-				FPGAMSHR_Reset();
-				init_dma(num_spmv);
-				fail = 1;
-				retryCount++;
-				printf("SpMV not done, retry %d time(s)\n", retryCount);
-				if (retryCount > 30)
-					break;
-				continue;
-				#endif
 			}
 			fetch_result(num_spmv);
 			compare_result(num_spmv);
-			}
 		// }
 		}
 	#else

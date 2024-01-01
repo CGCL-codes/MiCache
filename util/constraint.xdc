@@ -1,5 +1,5 @@
 create_pblock pblock_cache
-add_cells_to_pblock [get_pblocks pblock_cache] [get_cells -quiet [list design_1_i/FPGAMSHR_ra32_id12_i_0]]
+add_cells_to_pblock [get_pblocks pblock_cache] [get_cells -quiet [list design_1_i/MiCache_0]]
 resize_pblock [get_pblocks pblock_cache] -add {CLOCKREGION_X0Y0:CLOCKREGION_X3Y3}
 set_property C_CLK_INPUT_FREQ_HZ 300000000 [get_debug_cores dbg_hub]
 set_property C_ENABLE_CLK_DIVIDER false [get_debug_cores dbg_hub]

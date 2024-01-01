@@ -125,7 +125,6 @@ void FPGAMSHR_SetMaxMSHR(uint64_t mshr) {
 
 void FPGAMSHR_Reset() {
 	FPGAMSHR_Write_reg(24, 8);
-	sleep(1);
 }
 
 void FPGAMSHR_Get_stats_log(const char *benchname) {
