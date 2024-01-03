@@ -1589,7 +1589,7 @@ pagesize -pg 1 -db -bbox -sgen -130 0 3420 2220
 
   validate_bd_design
   save_bd_design
-  close_bd_design $design_name 
+  # close_bd_design $design_name 
 }
 # End of cr_bd_design_1()
 cr_bd_design_1 ""
@@ -1891,3 +1891,5 @@ move_dashboard_gadget -name {drc_1} -row 2 -col 0
 move_dashboard_gadget -name {timing_1} -row 0 -col 1
 move_dashboard_gadget -name {utilization_2} -row 1 -col 1
 move_dashboard_gadget -name {methodology_1} -row 2 -col 1
+
+launch_runs impl_1 -to_step write_bitstream -jobs 16

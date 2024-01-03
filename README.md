@@ -29,34 +29,59 @@ Or to generate verilog file, run:
 ```bash
 $ make verilog cfg=CONFIG_FILE
 ```
-After the MiCache IP is built, run the following commands to generate the example vivado project:
+After the MiCache IP is built, run the following commands to generate the example vivado project and the bitstream file (it might take a few hours):
 ```bash
 $ make project cfg=CONFIG_FILE
 $ cd output/vivado
 $ vivado -source genprj.tcl
 ```
 
-The configuration files of our evaluations in the paper are in `cfg/`. The output IPs are in `output/ip/`, and the output project is in `output/vivado/`.
+The configuration files of our evaluations are in `cfg/`. The output IPs are in `output/ip/`, and the output project is in `output/vivado/`.
 
-### Build Software
+### Xilinx QDMA
 The Xilinx QDMA driver is required (the installation guide is [here](https://xilinx.github.io/dma_ip_drivers/master/QDMA/linux-kernel/html/build.html)), since we use the Xilinx QDMA IP to transfer data and control signals between the host and the U280 FPGA through PCIe. After the bitstream is programmed into the FPGA and the QDMA driver module is loaded, rescan the PCIe bus and configure the QDMA driver by running the followings:
 
 ```bash
-# root may be required
-# assuming the PCIe device node is 0000:01:00.0, for example
+# Root may be required.
+# Assuming the PCIe device node is 0000:01:00.0, for example.
+
+# Rescan the PCIe bus.
 $ echo 1 > /sys/bus/pci/devices/0000:01:00.0/remove
 $ echo 1 > /sys/bus/pci/rescan
+
+# Configure the QDMA driver.
 $ echo 256 > /sys/bus/pci/devices/0000:01:00.0/qdma/qmax
 $ dma-ctl qdma01000 q add idx 0 mode mm dir bi
 $ dma-ctl qdma01000 q start idx 0 dir bi
 ```
 Then the QDMA device can be found in path `/dev/qdma01000-MM-0`.
 
+When finishing the evaluations, clean the QDMA configurations:
+
+```bash
+# Stop the QDMA driver after all evaluations are done.
+dma-ctl qdma01000 q stop idx 0 dir bi
+dma-ctl qdma01000 q del idx 0 dir bi
+```
+
+### Input Matrix
+The matrices are in MatrixMarket format and can be downloaded from [SuiteSparse](https://sparse.tamu.edu/). The `util/mm_matrix_to_csr.py` Python script converts a matrix in MatrixMarket format (`.mtx`) to the binary format for the evaluations. For example:
+```bash
+mkdir matrices
+cd matrices
+# Assuming a MatrixMarket file 'example-matrix.mtx' is downloaded into 'matrices/'
+python3 ../util/mm_matrix_to_csr.py -a 1..4 -i -s -v example-matrix.mtx
+```
+The output matrix in binary format will be stored in folder `matrices/example-matrix`.
+
+### Run Evaluations
 Run the following commands to compile the host program `spmvtest` for evaluations on U280:
 ```bash
 $ cd output/sw
 $ make
 # The QDMA driver must be loaded before executing the test.
-$ sudo ./spmvtest [QDMA_DEVICE_PATH] [BENCHMARK_MATRIX_PATH]
+# Usage: sudo ./spmvtest [QDMA_DEVICE_PATH] [MATRIX_FOLDER_PATH]
+# For example:
+$ sudo ./spmvtest /dev/qdma01000-MM-0 ../../matrices/example-matrix
 ```
-The format of the matrices is the same as in [MSHR-rich](https://github.com/m-asiatici/MSHR-rich).
+The evaluation results are stored in the output `.csv` files.
